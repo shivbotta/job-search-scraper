@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 from sources import greenhouse, lever, ashby, manual, workday  # noqa: E402
 from scrapers import google_ats, linkedin, indeed  # noqa: E402
-from scoring import deterministic, ai_scorer  # noqa: E402
+from scoring import deterministic, ai_scorer, bands  # noqa: E402
 import geo  # noqa: E402
 import dedupe  # noqa: E402
 from datehelpers import parse_posted_at  # noqa: E402
@@ -240,9 +240,11 @@ def cmd_score(args):
             ai = None
 
         jobs[jid] = job
+        band_score = ai["fit_score"] if ai and ai.get("fit_score") is not None else det["composite_score"]
+        band = bands.score_band(band_score)
         det_line = f"det={det['composite_score']} ({det['best_track']})"
         ai_line = f"ai={ai['fit_score']}" if ai and ai.get("fit_score") is not None else "ai=n/a"
-        print(f"{jid[:40]:40s} {job.get('title','')[:35]:35s} {det_line:28s} {ai_line}")
+        print(f"{jid[:36]:36s} {job.get('title','')[:32]:32s} {det_line:26s} {ai_line:8s} [{band}]")
 
     save_jobs(jobs)
 

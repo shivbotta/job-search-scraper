@@ -51,7 +51,11 @@ exactly these keys:
   "best_matching_track": "<one of the candidate's target_tracks names>",
   "why": "<2-3 sentences, specific to this posting, no generic filler>",
   "genuine_gaps": ["<specific gap>", ...],
-  "seniority_flag": "<'entry-level fit' | 'likely underqualified' | 'likely overqualified' | 'unclear'>"
+  "seniority_flag": "<'entry-level fit' | 'likely underqualified' | 'likely overqualified' | 'unclear'>",
+  "partial_match_rationale": "<ONLY if fit_score is between 40 and 65: 2-3
+    specific sentences on the transferable angle that makes this worth
+    applying to anyway despite the gap -- Shiva's instruction is to surface
+    partial matches honestly, not hide them. Empty string outside that range.>"
 }}
 """
 
@@ -74,6 +78,7 @@ exactly these keys:
             "why": f"[unparsed model output] {raw[:300]}",
             "genuine_gaps": [],
             "seniority_flag": "unclear",
+            "partial_match_rationale": "",
         }
 
     parsed["job_id"] = job["job_id"]
