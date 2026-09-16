@@ -8,12 +8,13 @@ server-side web search tool (same ANTHROPIC_API_KEY already used for
 scoring/tailoring -- no separate search API key needed) to search each ATS
 domain for postings matching Shiva's target-track keywords.
 
-For hits on Greenhouse/Lever/Ashby we re-fetch the company's full board
-through the existing structured API modules (src/sources/*) so the record
-has real posted_at, location, and full JD text -- the search hit is only
-used to *discover the company token*, never as the job data itself. For
-Workday/SmartRecruiters/Workable there's no simple public API, so the
-posting page itself is fetched once (no login) for the JD text.
+For hits on Greenhouse/Lever/Ashby/Workday we re-fetch the company's full
+board through the existing structured API modules (src/sources/*) so the
+record has real posted_at, location, and full JD text -- the search hit is
+only used to *discover the company* (token, or tenant/site for Workday),
+never as the job data itself. For SmartRecruiters/Workable there's no
+simple public API, so the posting page itself is fetched once (no login)
+for the JD text.
 
 Read-only. No login, anywhere. Rate limited: 3-8s randomized delay between
 every outbound request, exponential backoff on errors.
@@ -28,13 +29,14 @@ import datetime
 import requests
 import anthropic
 
-from sources import greenhouse, lever, ashby
+from sources import greenhouse, lever, ashby, workday
 
 MODEL = "claude-sonnet-4-6"
 
-# Domains searched. Greenhouse/Lever/Ashby hits get re-fetched through the
-# structured public APIs already in src/sources/; the rest are fetched as
-# plain pages since they have no simple public JSON feed.
+# Domains searched. Greenhouse/Lever/Ashby/Workday hits get re-fetched
+# through the structured public APIs already in src/sources/; the rest
+# (SmartRecruiters/Workable) are fetched as plain pages since they have no
+# simple public JSON feed.
 ATS_PLATFORMS = [
     "boards.greenhouse.io",
     "jobs.lever.co",
@@ -184,7 +186,26 @@ def fetch_jobs(profile: dict, max_queries: int = 8, keywords_per_query: int = 4)
         platform = meta["platform"]
         fetcher = STRUCTURED_FETCHERS.get(platform)
 
-        if fetcher:
+        if platform == "myworkdayjobs.com":
+            parsed = workday.parse_workday_url(url)
+            if not parsed:
+                continue
+            tenant, wd, site = parsed
+            key = (platform, tenant, wd, site)
+            if key in seen_tokens:
+                continue
+            seen_tokens.add(key)
+            try:
+                company_jobs = workday.fetch_jobs(tenant, wd, site)
+                for j in company_jobs:
+                    j["discovered_at"] = _now_iso()
+                    j["discovered_via"] = f"google_ats:{platform}"
+                jobs.extend(company_jobs)
+                print(f"  [ok] workday/{tenant}: {len(company_jobs)} posting(s)")
+            except Exception as e:
+                print(f"  [warn] google_ats: workday/{tenant} fetch failed: {e}")
+            _sleep()
+        elif fetcher:
             token_pat = TOKEN_PATTERNS[platform]
             m = token_pat.search(url)
             if not m:
@@ -205,7 +226,7 @@ def fetch_jobs(profile: dict, max_queries: int = 8, keywords_per_query: int = 4)
                 print(f"  [warn] google_ats: {platform}/{token} fetch failed: {e}")
             _sleep()
         else:
-            # No simple public API (Workday/SmartRecruiters/Workable) --
+            # No simple public API (SmartRecruiters/Workable) --
             # fetch the posting page itself, once, no login.
             try:
                 resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})

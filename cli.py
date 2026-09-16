@@ -20,10 +20,12 @@ import yaml
 from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-from sources import greenhouse, lever, ashby, manual  # noqa: E402
+from sources import greenhouse, lever, ashby, manual, workday  # noqa: E402
 from scrapers import google_ats, linkedin, indeed  # noqa: E402
 from scoring import deterministic, ai_scorer  # noqa: E402
 import geo  # noqa: E402
+import dedupe  # noqa: E402
+from datehelpers import parse_posted_at  # noqa: E402
 import tailor as tailor_mod  # noqa: E402
 import outreach as outreach_mod  # noqa: E402
 import tracker  # noqa: E402
@@ -62,61 +64,88 @@ def cmd_pull(args):
         companies = yaml.safe_load(f) or {}
 
     jobs = load_jobs()
-    new_count = 0
-    dropped_non_us = 0
-
-    def _add(j):
-        nonlocal new_count, dropped_non_us
-        if not geo.is_us_location(j.get("location", "")):
-            dropped_non_us += 1
-            return
-        if j["job_id"] not in jobs:
-            jobs[j["job_id"]] = j
-            new_count += 1
+    discovered = []
 
     for token in companies.get("greenhouse", []):
         try:
-            for j in greenhouse.fetch_jobs(token):
-                _add(j)
+            discovered.extend(greenhouse.fetch_jobs(token))
         except Exception as e:
             print(f"  [warn] greenhouse/{token} failed: {e}")
 
     for token in companies.get("lever", []):
         try:
-            for j in lever.fetch_jobs(token):
-                _add(j)
+            discovered.extend(lever.fetch_jobs(token))
         except Exception as e:
             print(f"  [warn] lever/{token} failed: {e}")
 
     for token in companies.get("ashby", []):
         try:
-            for j in ashby.fetch_jobs(token):
-                _add(j)
+            discovered.extend(ashby.fetch_jobs(token))
         except Exception as e:
             print(f"  [warn] ashby/{token} failed: {e}")
 
+    for entry in companies.get("workday", []) or []:
+        if not isinstance(entry, dict):
+            continue  # commented-out reference entries parse as None/str, skip
+        try:
+            discovered.extend(workday.fetch_jobs(entry["tenant"], entry["wd"], entry["site"]))
+        except Exception as e:
+            print(f"  [warn] workday/{entry.get('tenant')} failed: {e}")
+
+    new_count, duplicate_count, dropped_non_us = _merge_discovered(jobs, discovered)
     save_jobs(jobs)
-    print(f"Pulled. {new_count} new postings, {dropped_non_us} dropped (non-US). "
-          f"{len(jobs)} total tracked.")
+    print(f"Pulled. {new_count} new postings, {duplicate_count} duplicate(s) merged, "
+          f"{dropped_non_us} dropped (non-US). {len(jobs)} total tracked.")
 
 
 def _merge_discovered(jobs: dict, discovered: list) -> tuple[int, int, int]:
     """Merge a list of newly-discovered postings into the jobs dict.
+
+    Dedup happens on two levels (Part 3e): an exact job_id match (the same
+    URL/source scraped twice), and a normalized company+title fingerprint
+    match -- the SAME posting found via two different sources gets a
+    different job_id format per source (e.g. "li-..." vs "gh-company-123")
+    and would otherwise show up on the dashboard twice. On a fingerprint
+    match, source lists are merged (so the dashboard can show "found on
+    LinkedIn + Greenhouse") and the newer posted_at's data wins, since a
+    later scrape of the same role usually has fresher/fuller info.
+
     Returns (new_count, duplicate_count, dropped_non_us)."""
     new_count = duplicate_count = dropped_non_us = 0
+    fp_index = {
+        dedupe.fingerprint(j.get("company", ""), j.get("title", "")): jid
+        for jid, j in jobs.items()
+    }
+
     for j in discovered:
         if not geo.is_us_location(j.get("location", "")):
             dropped_non_us += 1
             continue
+
         existing = jobs.get(j["job_id"])
+        if not existing:
+            fp = dedupe.fingerprint(j.get("company", ""), j.get("title", ""))
+            existing_id = fp_index.get(fp)
+            if existing_id:
+                existing = jobs[existing_id]
+
         if existing:
             duplicate_count += 1
             sources = set(existing.get("also_found_on", [existing.get("source")]))
             sources.add(j["source"])
             existing["also_found_on"] = sorted(sources)
             existing["duplicate"] = len(sources) > 1
+
+            new_posted = parse_posted_at(j.get("posted_at"))
+            old_posted = parse_posted_at(existing.get("posted_at"))
+            if new_posted and (not old_posted or new_posted > old_posted):
+                merged = {**j, "job_id": existing["job_id"],
+                          "also_found_on": existing["also_found_on"],
+                          "duplicate": existing["duplicate"]}
+                jobs[existing["job_id"]] = merged
         else:
             jobs[j["job_id"]] = j
+            fp_index[dedupe.fingerprint(j.get("company", ""), j.get("title", ""))] = j["job_id"]
             new_count += 1
     return new_count, duplicate_count, dropped_non_us
 

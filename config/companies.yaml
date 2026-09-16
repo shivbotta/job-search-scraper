@@ -148,11 +148,12 @@ smartrecruiters:
   # - ikea
 
 workday:
-  # Workday doesn't have a simple public API like the others -- these get
-  # reached via the Google site: search scraper instead (myworkdayjobs.com)
-  # No token needed here; listed for reference only:
-  # - jpmorgan
-  # - bankofamerica
-  # - lockheedmartin
-  # - accenture
-  # - deloitte
+  # Part 3d: Workday's internal JSON API (src/sources/workday.py) needs
+  # three parts per company -- tenant, the numbered wd instance, and the
+  # site name -- which aren't guessable from a company's branded careers
+  # domain (careers.company.com) alone; they only show up in the ACTUAL
+  # myworkdayjobs.com backend URL. Verified live below. The Google site:
+  # search scraper (src/scrapers/google_ats.py) discovers more of these
+  # organically over time and fetches them the same structured way
+  # automatically -- no manual entry needed for that path.
+  - {tenant: nvidia, wd: wd5, site: NVIDIAExternalCareerSite}

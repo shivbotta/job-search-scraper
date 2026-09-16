@@ -9,17 +9,9 @@ hidden (i.e. the company is genuinely hiring for that role again).
 import datetime
 import json
 import os
-import re
 
 from datehelpers import parse_posted_at
-
-
-def _fingerprint(company: str, title: str) -> str:
-    def norm(s):
-        s = (s or "").lower().strip()
-        s = re.sub(r"[^a-z0-9]+", " ", s)
-        return re.sub(r"\s+", " ", s).strip()
-    return f"{norm(company)}||{norm(title)}"
+from dedupe import fingerprint as _fingerprint
 
 
 def load(path: str) -> dict:
