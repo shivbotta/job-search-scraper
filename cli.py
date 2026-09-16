@@ -262,6 +262,11 @@ def cmd_tailor(args):
     pdf_path = os.path.join(job_dir, "resume.pdf")
 
     result = tailor_mod.tailor_resume(job, profile, pdf_out_path=pdf_path)
+    ai_score = (job.get("ai_score") or {}).get("fit_score")
+    det_score = (job.get("deterministic_score") or {}).get("composite_score")
+    result["job_score"] = ai_score if ai_score is not None else det_score
+    result["job_title"] = job.get("title")
+    result["job_company"] = job.get("company")
     report_path = os.path.join(job_dir, "report.json")
     with open(report_path, "w") as f:
         json.dump(result, f, indent=2)
@@ -336,16 +341,21 @@ def cmd_applied(args):
 
 def cmd_dashboard(args):
     jobs = load_jobs()
-    buckets = dashboard_mod.build_view(jobs, HIDDEN_FILE)
-    html_out = dashboard_mod.render_html(buckets)
+    profile = load_profile()
+    sources_status = {"google site: search": True, "Greenhouse/Lever/Ashby/Workday": True,
+                       "LinkedIn": True, "Indeed": True}
+    feed_html = dashboard_mod.render_feed_tab(jobs, HIDDEN_FILE, TRACKER_FILE, sources_status)
+    applied_html = dashboard_mod.render_applied_tab(TRACKER_FILE)
+    skills_gap_html = dashboard_mod.render_skills_gap_tab(TAILORED_DIR)
+    profile_html = dashboard_mod.render_profile_tab(profile)
+    html_out = dashboard_mod.render_app_html(feed_html, applied_html, skills_gap_html, profile_html)
     out_path = os.path.join(DATA_DIR, "dashboard.html")
     with open(out_path, "w") as f:
         f.write(html_out)
-    total = sum(len(v) for v in buckets.values())
-    print(f"Static snapshot written to {out_path} ({total} jobs shown)")
-    print("For the interactive version (Mark Applied buttons that actually work):")
+    print(f"Static snapshot written to {out_path}")
+    print("For the interactive version (Mark Applied, Research+Tailor, profile edits):")
     print("  python server.py")
-    print("  then open http://localhost:8765")
+    print("  then open http://localhost:9009")
 
 
 def cmd_list(args):

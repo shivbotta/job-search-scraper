@@ -61,9 +61,10 @@ def _experience_penalty(text: str, ceiling_years: int) -> tuple[int, int | None]
     """Never excludes -- just ranks a posting lower when it asks for more
     years than the profile's ceiling. Returns (penalty, required_years)."""
     years_mentioned = [int(m.group(1)) for m in _YEARS_PATTERN.finditer(text)]
-    if not years_mentioned:
+    plausible = [y for y in years_mentioned if y <= 20]  # drop noise ("100 years in business")
+    if not plausible:
         return 0, None
-    required = max(y for y in years_mentioned if y <= 20)  # drop obvious noise ("10x", years like "2024")
+    required = max(plausible)
     if required <= ceiling_years:
         return 0, required
     overage = required - ceiling_years

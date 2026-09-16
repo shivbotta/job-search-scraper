@@ -38,6 +38,13 @@ def upsert(path: str, job_id: str, **fields):
         writer.writerows(rows)
 
 
+def read_all(path: str) -> list[dict]:
+    if not os.path.exists(path):
+        return []
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
 def mark_applied(tracker_path: str, hidden_path: str, job: dict):
     """Logs the application AND hides same-fingerprint postings from the
     dashboard until that company reposts the role."""
