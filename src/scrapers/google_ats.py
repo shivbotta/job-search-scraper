@@ -137,8 +137,17 @@ def _is_excluded(title: str, excluded_keywords: list[str]) -> bool:
     return any(ek.lower() in low for ek in excluded_keywords)
 
 
-def _guess_company_from_url(url: str) -> str:
-    m = re.search(r"://(?:[^./]+\.)*([^./]+)\.(?:com|io|net|org)", url)
+def _guess_company_from_url(platform: str, url: str) -> str:
+    """Pull the actual employer name out of a Workday/SmartRecruiters/Workable
+    URL. The company sits in different places per platform, so a generic
+    "last label before .com" regex would just return the platform's own
+    name (e.g. "myworkdayjobs") for every hit -- it has to be per-platform."""
+    if platform == "myworkdayjobs.com":
+        # <company>.wd#.myworkdayjobs.com/...
+        m = re.search(r"://([^.]+)\.wd\d+\.myworkdayjobs\.com", url)
+        return m.group(1) if m else url
+    # smartrecruiters.com/<Company>/... and workable.com/<company>/...
+    m = re.search(r"://[^/]+/([^/]+)/", url)
     return m.group(1) if m else url
 
 
@@ -203,7 +212,7 @@ def fetch_jobs(profile: dict, max_queries: int = 8, keywords_per_query: int = 4)
                 resp.raise_for_status()
                 jobs.append({
                     "source": "google_ats",
-                    "company": _guess_company_from_url(url),
+                    "company": _guess_company_from_url(platform, url),
                     "job_id": f"gats-{hashlib.sha1(url.encode()).hexdigest()[:10]}",
                     "title": meta["title"],
                     "location": "",

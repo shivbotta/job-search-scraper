@@ -9,25 +9,32 @@
 #   Lever:      api.lever.co/v0/postings/<TOKEN>
 #   Ashby:      api.ashbyhq.com/posting-api/job-board/<TOKEN>
 #
-# NOTE ON ACCURACY:
-#   The tokens below are commonly known/publicly documented ones. I verified a
-#   sample live via web search (doordashusa confirmed working). I could NOT
-#   individually verify every single token below from this environment — a
-#   wrong token just silently 404s, it won't break anything.
+# VERIFIED (Part 2, this build pass):
+#   Every token below was hit live against its API. The original starter
+#   list's entire `lever` section (14 tokens) 404'd -- those companies don't
+#   publish a public Lever board under those names anymore (e.g. netflix and
+#   github now run their own custom career sites). They've been removed and
+#   replaced with real, currently-live tokens.
 #
-#   FIRST THING TO ASK CLAUDE CODE TO DO: "Verify every token in this file by
-#   hitting the API live, remove or fix any that 404, and add 30-50 more
-#   companies you find by searching for AI/software/fintech company careers
-#   pages." Claude Code has live network access and can do this in minutes.
+#   The new companies added across all three platforms were not guessed --
+#   they were discovered organically by the Google `site:` search scraper
+#   (src/scrapers/google_ats.py) and each one already returned real posting
+#   data in an actual run, which is stronger evidence than a bare 200 status.
 #
-#   This list is a STARTER, not a ceiling. The Google `site:` search scraper
-#   (built separately, no token needed) is what makes this open-ended — it
-#   finds ANY company on these ATS platforms, not just the ones listed here.
+#   NOT included: `jobgether` (jobs.lever.co/jobgether) -- it returned 4,457
+#   postings, far more than a real single employer would have. It's a job
+#   aggregator republishing other companies' listings under its own Lever
+#   board, not a direct employer. Leaving it out of direct-pull config;
+#   flagged separately for Part 3e/4 dedup since it's already sitting in
+#   data/jobs_seen.json from the discovery scraper.
+#
+#   This list is still a STARTER, not a ceiling -- the Google `site:` search
+#   scraper is what makes company coverage open-ended going forward.
 #
 # ==============================================================================
 
 greenhouse:
-  # Big Tech / Cloud
+  # Verified alive (starter list, re-checked live)
   - stripe
   - doordashusa
   - airbnb
@@ -37,78 +44,103 @@ greenhouse:
   - coinbase
   - discord
   - figma
-  - notion
   - asana
   - dropbox
   - twilio
   - okta
   - datadog
   - gitlab
-  - hashicorp
   - cloudflare
   - elastic
   - mongodb
-
-  # AI / ML companies
   - anthropic
   - scaleai
-  - together
-  - perplexityai
-  - mistralai
-  - cohere
-  - runwayml
-  - hugging-face
-  - weightsandbiases
-  - anyscale
-  - replit
-
-  # Fintech (Tier 1 priority)
-  - plaid
   - brex
-  - ramp
   - chime
   - affirm
-  - marqeta
-  - modernTreasury
   - mercury
 
-  # Consulting / Enterprise
-  - palantir
-  - snowflake
-  - confluent
-
-  # Healthcare / Other
-  - oscarhealth
-  - devotedhealth
-  - benchling
+  # Newly discovered via google_ats, confirmed live with real postings
+  - tenstorrent
+  - labelbox
+  - ebanx
+  - gofundme
+  - melio
+  - legion
+  - ylopo
+  - netlify
+  - samsara
+  - sonyinteractiveentertainmentglobal
+  - appier
 
 lever:
-  - netflix
-  - github
-  - lyft
-  - box
-  - eventbrite
-  - shopify
-  - webflow
-  - vercel
-  - retool
-  - amplitude
-  - sourcegraph
-  - loom
-  - postman
-  - segment
+  # The entire original starter list (netflix, github, lyft, box, eventbrite,
+  # shopify, webflow, vercel, retool, amplitude, sourcegraph, loom, postman,
+  # segment) 404'd live -- removed. Replaced with tokens confirmed live via
+  # google_ats discovery runs.
+  - sonarsource
+  - veeva
+  - palantir
+  - cfgi
+  - field-ai
+  - shieldai
+  - yuno
+  - Onehouse
+  - redoxengine
+  - launchsquad
+  - virtualitics
+  - coderpad
+  - smart-working-solutions
+  - outcomesai
+  - osedea
+  - paytm
+  - deepgenomics
+  - spotify
+  - acds
 
 ashby:
+  # Verified alive (starter list, re-checked live)
   - linear
   - vanta
   - deel
   - ramp
   - openai
-  - rippling
-  - clay
   - modal
-  - fireworks-ai
-  - assembled
+
+  # Newly discovered via google_ats, confirmed live with real postings
+  - truelogic
+  - clarity
+  - abridge
+  - runetech
+  - magicschool
+  - spector-ai
+  - weave
+  - protegrity
+  - teamworks
+  - super.com
+  - junipersquare
+  - cape
+  - sewer-ai
+  - Commure
+  - sovra
+  - Blockworks
+  - tekion
+  - checkout.com
+  - flosports
+  - tem
+  - 1password
+  - givebutter
+  - upside
+  - pylon-labs
+  - risklabs
+  - perplexity
+  - clair
+  - emergence
+  - kraken.com
+  - palo-it
+  - zeely
+  - g2i
+  - teero
 
 smartrecruiters:
   # Add company names as they appear in smartrecruiters.com/<company> URLs
@@ -116,7 +148,7 @@ smartrecruiters:
   # - ikea
 
 workday:
-  # Workday doesn't have a simple public API like the others — these get
+  # Workday doesn't have a simple public API like the others -- these get
   # reached via the Google site: search scraper instead (myworkdayjobs.com)
   # No token needed here; listed for reference only:
   # - jpmorgan

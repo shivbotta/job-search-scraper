@@ -21,8 +21,9 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 from sources import greenhouse, lever, ashby, manual  # noqa: E402
-from scrapers import google_ats  # noqa: E402
+from scrapers import google_ats, linkedin, indeed  # noqa: E402
 from scoring import deterministic, ai_scorer  # noqa: E402
+import geo  # noqa: E402
 import tailor as tailor_mod  # noqa: E402
 import outreach as outreach_mod  # noqa: E402
 import tracker  # noqa: E402
@@ -62,53 +63,51 @@ def cmd_pull(args):
 
     jobs = load_jobs()
     new_count = 0
+    dropped_non_us = 0
+
+    def _add(j):
+        nonlocal new_count, dropped_non_us
+        if not geo.is_us_location(j.get("location", "")):
+            dropped_non_us += 1
+            return
+        if j["job_id"] not in jobs:
+            jobs[j["job_id"]] = j
+            new_count += 1
 
     for token in companies.get("greenhouse", []):
         try:
             for j in greenhouse.fetch_jobs(token):
-                if j["job_id"] not in jobs:
-                    jobs[j["job_id"]] = j
-                    new_count += 1
+                _add(j)
         except Exception as e:
             print(f"  [warn] greenhouse/{token} failed: {e}")
 
     for token in companies.get("lever", []):
         try:
             for j in lever.fetch_jobs(token):
-                if j["job_id"] not in jobs:
-                    jobs[j["job_id"]] = j
-                    new_count += 1
+                _add(j)
         except Exception as e:
             print(f"  [warn] lever/{token} failed: {e}")
 
     for token in companies.get("ashby", []):
         try:
             for j in ashby.fetch_jobs(token):
-                if j["job_id"] not in jobs:
-                    jobs[j["job_id"]] = j
-                    new_count += 1
+                _add(j)
         except Exception as e:
             print(f"  [warn] ashby/{token} failed: {e}")
 
     save_jobs(jobs)
-    print(f"Pulled. {new_count} new postings. {len(jobs)} total tracked.")
+    print(f"Pulled. {new_count} new postings, {dropped_non_us} dropped (non-US). "
+          f"{len(jobs)} total tracked.")
 
 
-def cmd_scrape(args):
-    profile = load_profile()
-    jobs = load_jobs()
-    new_count = 0
-    duplicate_count = 0
-
-    print("Discovering via Google site: search "
-          "(Greenhouse/Lever/Ashby/Workday/SmartRecruiters/Workable)...")
-    try:
-        discovered = google_ats.fetch_jobs(profile, max_queries=args.max_queries)
-    except KeyError:
-        print("  [error] ANTHROPIC_API_KEY not set -- google_ats needs it for web search")
-        discovered = []
-
+def _merge_discovered(jobs: dict, discovered: list) -> tuple[int, int, int]:
+    """Merge a list of newly-discovered postings into the jobs dict.
+    Returns (new_count, duplicate_count, dropped_non_us)."""
+    new_count = duplicate_count = dropped_non_us = 0
     for j in discovered:
+        if not geo.is_us_location(j.get("location", "")):
+            dropped_non_us += 1
+            continue
         existing = jobs.get(j["job_id"])
         if existing:
             duplicate_count += 1
@@ -119,10 +118,64 @@ def cmd_scrape(args):
         else:
             jobs[j["job_id"]] = j
             new_count += 1
+    return new_count, duplicate_count, dropped_non_us
+
+
+def cmd_scrape(args):
+    profile = load_profile()
+    jobs = load_jobs()
+    total_new = total_dup = total_dropped = 0
+
+    print("Discovering via Google site: search "
+          "(Greenhouse/Lever/Ashby/Workday/SmartRecruiters/Workable)...")
+    try:
+        discovered = google_ats.fetch_jobs(profile, max_queries=args.max_queries)
+    except KeyError:
+        print("  [error] ANTHROPIC_API_KEY not set -- google_ats needs it for web search")
+        discovered = []
+    n, d, u = _merge_discovered(jobs, discovered)
+    total_new += n
+    total_dup += d
+    total_dropped += u
+    print(f"  google_ats: {n} new, {d} duplicate, {u} dropped (non-US)")
+
+    keyword_pool = google_ats._build_keyword_pool(profile)
+
+    if not args.skip_linkedin:
+        print("Searching LinkedIn (secondary account)...")
+        try:
+            discovered = linkedin.fetch_jobs(keyword_pool)
+            n, d, u = _merge_discovered(jobs, discovered)
+            total_new += n
+            total_dup += d
+            total_dropped += u
+            print(f"  linkedin: {n} new, {d} duplicate, {u} dropped (non-US)")
+        except KeyError:
+            print("  [skip] SCRAPER_LINKEDIN_USERNAME/PASSWORD not set")
+        except linkedin.SecurityCheckpointError as e:
+            print(f"  [stopped] {e}")
+        except Exception as e:
+            print(f"  [warn] linkedin scrape failed: {e}")
+
+    if not args.skip_indeed:
+        print("Searching Indeed (secondary account)...")
+        try:
+            discovered = indeed.fetch_jobs(keyword_pool)
+            n, d, u = _merge_discovered(jobs, discovered)
+            total_new += n
+            total_dup += d
+            total_dropped += u
+            print(f"  indeed: {n} new, {d} duplicate, {u} dropped (non-US)")
+        except KeyError:
+            print("  [skip] SCRAPER_INDEED_USERNAME/PASSWORD not set")
+        except indeed.SecurityCheckpointError as e:
+            print(f"  [stopped] {e}")
+        except Exception as e:
+            print(f"  [warn] indeed scrape failed: {e}")
 
     save_jobs(jobs)
-    print(f"Scrape complete. {new_count} new posting(s), {duplicate_count} duplicate(s) seen again. "
-          f"{len(jobs)} total tracked.")
+    print(f"Scrape complete. {total_new} new posting(s), {total_dup} duplicate(s) seen again, "
+          f"{total_dropped} dropped (non-US). {len(jobs)} total tracked.")
 
 
 def cmd_add_manual(args):
@@ -275,8 +328,10 @@ def main():
     sp.add_argument("--companies", default="config/companies.yaml")
     sp.set_defaults(func=cmd_pull)
 
-    sp = sub.add_parser("scrape", help="Discover fresh postings via Google site: search (Part 3b)")
+    sp = sub.add_parser("scrape", help="Discover fresh postings from all sources")
     sp.add_argument("--max-queries", type=int, default=8)
+    sp.add_argument("--skip-linkedin", action="store_true")
+    sp.add_argument("--skip-indeed", action="store_true")
     sp.set_defaults(func=cmd_scrape)
 
     sp = sub.add_parser("add-manual")
