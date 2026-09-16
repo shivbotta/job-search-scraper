@@ -257,15 +257,27 @@ def cmd_tailor(args):
         print(f"Job {args.job_id} not found. Run `list` to see known job IDs.")
         return
 
-    result = tailor_mod.tailor_resume(job, profile)
-    os.makedirs(TAILORED_DIR, exist_ok=True)
-    out_path = os.path.join(TAILORED_DIR, f"{args.job_id}.json")
-    with open(out_path, "w") as f:
+    job_dir = os.path.join(TAILORED_DIR, args.job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    pdf_path = os.path.join(job_dir, "resume.pdf")
+
+    result = tailor_mod.tailor_resume(job, profile, pdf_out_path=pdf_path)
+    report_path = os.path.join(job_dir, "report.json")
+    with open(report_path, "w") as f:
         json.dump(result, f, indent=2)
 
     if result.get("_standing_rules_violations"):
         print(f"  [WARNING] {result['_WARNING']}")
-    print(f"Tailored content written to {out_path}")
+        print(f"Report written to {report_path} (no PDF -- standing rules violation)")
+        return
+
+    print(f"Baseline coverage: {result['baseline_coverage_pct']}% -> "
+          f"Tailored coverage: {result.get('tailored_coverage_pct', '?')}%")
+    if result.get("honest_gaps"):
+        print(f"Honest gaps ({len(result['honest_gaps'])}): {', '.join(result['honest_gaps'][:3])}"
+              + (" ..." if len(result["honest_gaps"]) > 3 else ""))
+    print(f"PDF: {pdf_path}")
+    print(f"Report: {report_path}")
 
 
 def cmd_outreach(args):
@@ -378,6 +390,8 @@ def main():
 
     sp = sub.add_parser("tailor")
     sp.add_argument("--job-id", required=True)
+    sp.add_argument("--format", choices=["pdf"], default="pdf",
+                     help="PDF only, per Shiva's decision -- no DOCX")
     sp.set_defaults(func=cmd_tailor)
 
     sp = sub.add_parser("outreach")

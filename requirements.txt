@@ -20,5 +20,9 @@ lxml>=5.0
 # PDF generation for tailored resumes
 reportlab>=4.0
 
+# PDF text re-extraction, to verify keywords survived the generated PDF
+# (the actual ATS-passability check, not just the pre-render text)
+pypdf>=4.0
+
 # Optional: email alerts
 # (smtplib is stdlib, no install needed)
