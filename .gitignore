@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+data/jobs_seen.json
+data/tracker.csv
+data/tailored/
+venv/
+.DS_Store

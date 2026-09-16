@@ -1,0 +1,263 @@
+{
+  "name": "Shiva Botta",
+  "email": "shivbotta9@gmail.com",
+  "phone": "(414) 885-7275",
+  "location": "Austin, TX",
+  "open_to_relocation": true,
+  "links": {
+    "linkedin": "https://www.linkedin.com/in/shivabotta/",
+    "github": "https://github.com/shivbotta",
+    "huggingface": "https://huggingface.co/shiv9999",
+    "portfolio": "https://shivabotta.com"
+  },
+  "education": {
+    "school": "University of Wisconsin-Milwaukee",
+    "degree": "B.S. Information Science & Technology (STEM-designated)",
+    "graduated": "December 2025",
+    "gpa": 3.2,
+    "coursework_ordered_by_relevance": [
+      "Foundations of AI in IST (LLMs, PyTorch)",
+      "Applied AI & Blockchain",
+      "Web & Web Application Development",
+      "Database Systems / Database Information Retrieval Systems",
+      "Data Analysis & Visualization",
+      "Systems Analysis",
+      "Network & System Administration",
+      "Information Security I & II",
+      "Ethical Hacking & Penetration Testing",
+      "IT Ethics",
+      "Legal Aspects of Information Products"
+    ]
+  },
+
+  "target_tracks": [
+    {
+      "name": "Software Engineering (Entry / New Grad)",
+      "weight": 1.0,
+      "keywords": ["software engineer", "software developer", "sde",
+        "software engineer i", "sde i", "sde 1", "associate software engineer",
+        "associate developer", "entry level software engineer", "entry-level",
+        "junior software engineer", "junior developer", "new grad",
+        "new graduate", "recent graduate", "early career", "campus hire",
+        "university graduate", "class of 2026", "class of 2027",
+        "2026 grad", "2025 grad", "2026 start"]
+    },
+    {
+      "name": "AI / ML Engineering",
+      "weight": 1.0,
+      "keywords": ["ai engineer", "ai software engineer", "ai developer",
+        "applied ai engineer", "machine learning engineer", "ml engineer",
+        "ai/ml engineer", "generative ai", "genai", "gen ai engineer",
+        "llm", "large language model", "llm engineer", "foundation model",
+        "fine-tuning", "fine tuning", "rag", "retrieval augmented generation",
+        "prompt engineering", "pytorch", "transformers", "hugging face",
+        "ai integration", "nlp", "natural language processing",
+        "agentic", "ai agent", "agent framework", "workflow automation",
+        "langchain", "openai api", "vector database", "embeddings",
+        "model deployment", "scikit-learn", "pandas", "numpy"]
+    },
+    {
+      "name": "Full Stack / Backend",
+      "weight": 0.95,
+      "keywords": ["full stack", "fullstack", "full-stack", "backend",
+        "back-end", "back end engineer", "frontend", "front-end",
+        "api engineer", "platform engineer", "product engineer",
+        "react", "react native", "node.js", "nodejs", "javascript",
+        "typescript", "python", "rest api", "restful apis", "graphql",
+        "microservices", "distributed systems", "serverless",
+        "postgresql", "mongodb", "firebase", "supabase", "nosql",
+        "aws", "gcp", "azure", "docker", "kubernetes", "ci/cd", "vercel"]
+    },
+    {
+      "name": "Data Engineering",
+      "weight": 0.75,
+      "keywords": ["data engineer", "data engineering", "etl", "elt",
+        "data pipeline", "sql", "mysql", "data platform",
+        "analytics engineer", "spark", "airflow", "snowflake",
+        "databricks", "data warehouse", "bigquery", "dbt"]
+    }
+  ],
+
+  "excluded_tracks": {
+    "note": "Shiva is explicitly NOT targeting these. Never scrape for them, never rank them, never tailor toward them, never suggest pivoting to them. Security and networking coursework may appear as brief supporting evidence of technical range on a resume, never as a target role.",
+    "never_target": [
+      "IT Support", "Help Desk", "Desktop Support", "IT Analyst",
+      "Service Desk", "Technical Support", "SOC Analyst", "SOC Tier 1",
+      "Security Analyst", "Junior Security Analyst", "Security Operations",
+      "Network Administrator", "Systems Administrator", "SysAdmin",
+      "Network Engineer", "Information Security Analyst"
+    ]
+  },
+
+  "industry_priority": {
+    "tier_1": ["financial services", "fintech", "investment bank",
+      "private equity", "asset management", "trading", "payments",
+      "capital markets", "hedge fund", "wealth management", "banking"],
+    "tier_2": ["artificial intelligence", "ai", "machine learning",
+      "software", "saas", "cloud", "developer tools", "enterprise software",
+      "data infrastructure", "cybersecurity"],
+    "tier_3": ["healthcare", "health tech", "biotech", "defense",
+      "aerospace", "space", "space tech", "insurance", "automotive",
+      "sports", "sports tech", "gaming", "e-commerce", "logistics",
+      "energy", "telecom", "media", "education tech", "real estate tech",
+      "agriculture tech", "manufacturing", "consulting"]
+  },
+  "location_scope": "United States (all states, all cities, plus remote)",
+  "experience_ceiling_years": 3,
+
+  "programming_languages": ["Python", "JavaScript", "Java", "C", "C++",
+    "SQL", "HTML", "CSS", "Bash"],
+
+  "skills": {
+    "frameworks_libraries": ["React", "React Native", "Node.js", "REST APIs",
+      "PyTorch", "Hugging Face Transformers", "pandas", "NumPy", "scikit-learn"],
+    "backend_data": ["Supabase (PostgreSQL)", "Firebase", "Firestore",
+      "MongoDB", "MySQL", "NoSQL data modeling",
+      "Authentication & authorization", "Role-based access control (RBAC)"],
+    "tools_practices": ["Git", "GitHub", "Linux", "Ubuntu", "AWS (foundational)",
+      "Vercel", "Sentry", "Agile", "Scrum", "CI/testing"],
+    "systems_programming": ["C with Pthreads", "Thread pools", "Mutexes",
+      "Semaphores", "Shared task queues", "Parallel benchmarking"]
+  },
+
+  "certifications_earned": [
+    "Introduction to Artificial Intelligence",
+    "Introduction to Generative AI",
+    "Foundations and Applications of Generative AI",
+    "Agentic AI in Practice",
+    "AI Foundations for Everyone Specialization",
+    "Generative AI: Foundation Models and Platforms",
+    "Introduction to Software, Programming, and Databases",
+    "Python for Data Science AI & Development",
+    "Google AI Professional Certificate",
+    "Google IT Automation with Python Professional Certificate",
+    "Google AI Essentials",
+    "AI Training and Tools for Students"
+  ],
+  "certifications_in_progress_DO_NOT_LIST": [
+    "AWS Certified Cloud Practitioner"
+  ],
+
+  "experience": [
+    {
+      "title": "Co-Founder & Full-Stack Developer",
+      "org": "KwikJobs",
+      "dates": "August 2025 - Present",
+      "location": "Chicago & the Midwest",
+      "bullets": [
+        "Co-founded and launched a cross-platform, location-based job-matching product (iOS, Android, web) connecting students with nearby part-time jobs",
+        "Grew to 10,000+ users and 1,000+ local businesses across Chicago and the Midwest",
+        "Architected and built the app in React Native over a Supabase (PostgreSQL) and Firebase backend; designed scalable NoSQL data models for job posts, candidate profiles, applications, and in-app chat",
+        "Implemented end-to-end authentication workflows and role-based backend security rules separating candidate and business permissions",
+        "Built geolocation-based job discovery, one-tap apply, candidate profiles, and real-time in-app messaging",
+        "Integrated Sentry for production error monitoring; triaged and resolved live issues during user growth",
+        "Owned the full product lifecycle: UI/UX, full-stack development, testing, deployment, and early user acquisition across two metro markets"
+      ]
+    },
+    {
+      "title": "Co-Founder & Full-Stack Developer",
+      "org": "HypeSquad",
+      "dates": "May 2025 - August 2025",
+      "location": "hypesquad.app",
+      "framing_note": "Frame as idea to shipped product arc, not just final features",
+      "bullets": [
+        "Took an early product idea through to a shipped, production application at hypesquad.app",
+        "Designed and developed a secure serverless backend on Node.js (Vercel) with a multi-OTP authentication flow and Firestore persistence governed by strict security rules",
+        "Built a referral system and user-feedback pipeline to drive and measure early growth",
+        "Owned UI/UX, hosting configuration, and DNS/email deliverability (SPF, DKIM) end to end"
+      ]
+    },
+    {
+      "title": "Campus Employment",
+      "org": "University of Wisconsin-Milwaukee",
+      "dates": "2023 - 2025",
+      "usage_note": "DE-EMPHASIZED. Omit by default. One line maximum, and only if a posting specifically needs an employment-gap explanation. Use that space for Hugging Face models or KwikJobs/HypeSquad detail instead.",
+      "bullets": [
+        "BOSS Safe-Ride Driver (~1 year) and Dining Services/Restor (~1 year)"
+      ]
+    }
+  ],
+
+  "projects": [
+    {
+      "name": "Senior Capstone - Campus Collective (AI-Enabled Web Application)",
+      "dates": "August 2025 - December 2025",
+      "bullets": [
+        "Built an end-to-end AI-enabled web application in a cross-functional Agile team: React front end, Node.js REST API, PostgreSQL database, and an LLM-powered feature via the OpenAI API",
+        "Led development from customer discovery and feasibility analysis through implementation and public demos",
+        "Implemented secure database integration with authentication, authorization, and role-based access; evaluated scalability, risk, and ethical considerations in formal systems analysis"
+      ]
+    },
+    {
+      "name": "Machine Learning Models - Published on Hugging Face",
+      "dates": "2025",
+      "link": "https://huggingface.co/shiv9999",
+      "bullets": [
+        "Fine-tuned BERT for binary sentiment classification on IMDB movie reviews using PyTorch and Hugging Face Transformers; published as imdb-bert-470",
+        "Fine-tuned DistilBERT for multi-class emotion classification; published as Distilbert-base-emotion",
+        "Implemented and trained a small GPT-style language model from scratch in Python/PyTorch (tokenization, attention, training loop); published as GPT-toy and GPT-toy02",
+        "Wrote public model cards documenting each model's task, base architecture, and usage"
+      ],
+      "missing_data": "Dataset sizes and accuracy/F1 scores not provided. Keep bullets qualitative. Never invent performance numbers."
+    },
+    {
+      "name": "Thread Pool - Parallel Matrix Multiplication (C, Pthreads)",
+      "dates": "March 2025 - April 2025",
+      "bullets": [
+        "Implemented a custom thread pool in C using Pthreads, mutexes, and semaphores coordinating a shared task queue for safe concurrent execution",
+        "Partitioned matrix multiplication into independent partial products and benchmarked multithreaded execution against a single-threaded baseline"
+      ],
+      "missing_data": "Exact benchmark numbers and GitHub link not provided. Never state a specific speedup figure."
+    },
+    {
+      "name": "AI Personalized Fitness Coach (Python)",
+      "dates": "March 2025 - April 2025",
+      "bullets": [
+        "Built an NLP-driven fitness coach with a chatbot interface that generates personalized workout and diet plans and adapts recommendations from user feedback and progress"
+      ],
+      "missing_data": "GitHub link not provided."
+    },
+    {
+      "name": "Pokedex Mobile Application (React Native)",
+      "dates": "November 2024 - December 2024",
+      "bullets": [
+        "Built a cross-platform app (Android, iOS, web) with custom navigation, third-party API integration, and optimized state management for smooth multi-screen performance"
+      ],
+      "missing_data": "GitHub link not provided."
+    },
+    {
+      "name": "Database & Web Application Security Project",
+      "dates": "2024",
+      "usage_note": "BRIEF MENTION ONLY - never a lead project, only if the JD genuinely calls for it",
+      "bullets": [
+        "Designed a SQL database with role-based access control; implemented authentication and authorization in a web application; analyzed common vulnerabilities including SQL injection and improper access control"
+      ]
+    },
+    {
+      "name": "Ethical Hacking & Penetration Testing Labs",
+      "usage_note": "BRIEF MENTION ONLY - never a lead project, only if the JD genuinely calls for it",
+      "bullets": [
+        "Conducted controlled penetration testing using Nmap, Metasploit, and Metasploitable; documented findings and remediation recommendations"
+      ]
+    },
+    {
+      "name": "Cisco Routing & Switching Security Labs",
+      "usage_note": "BRIEF MENTION ONLY - never a lead project, only if the JD genuinely calls for it",
+      "bullets": [
+        "Configured routers, switches, and VLANs using Cisco IOS; implemented basic security controls and traffic-flow analysis"
+      ]
+    }
+  ],
+
+  "standing_rules": [
+    "Target roles are Software Engineer / AI Engineer tracks ONLY. Never target, scrape for, rank, or tailor toward IT Support, Help Desk, SOC, Security Analyst, or Networking/SysAdmin roles.",
+    "No work authorization, visa, immigration, or sponsorship language anywhere, on any document, regardless of how a job posting is worded.",
+    "No mention of Farmside Technologies or any India-based work experience, in any document, regardless of how a job posting is worded.",
+    "KwikJobs metrics are locked at 10,000+ users / 1,000+ businesses. Never round up, extrapolate, or add unverified numbers.",
+    "Never list a certification as earned unless it is in certifications_earned. AWS Certified Cloud Practitioner is in progress - never include it in any form, not even as 'in progress' or 'pursuing'.",
+    "Never invent a metric, percentage, benchmark result, dataset size, accuracy/F1, or outcome. If a bullet would be stronger with a number not provided here, flag it as needed input rather than estimating.",
+    "Never phrase anything so it implies experience Shiva cannot defend unscripted under a technical interviewer's follow-up. Coursework stays coursework, a project stays a project.",
+    "No AI-sounding copy. Banned: spearheaded, leveraged, results-driven, dynamic, passionate about, delve, robust, cutting-edge, decorative em-dashes, three-verb lists.",
+    "No founder-bragging tone on KwikJobs or HypeSquad. Describe what was built and its real scale."
+  ]
+}

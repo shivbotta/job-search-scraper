@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""
+Shiva's job search CLI. See CLAUDE.md for the full workflow.
+
+Usage:
+    python cli.py pull [--companies config/companies.yaml]
+    python cli.py add-manual --url URL --text "..." [--title T] [--company C]
+    python cli.py score [--job-id ID]
+    python cli.py tailor --job-id ID
+    python cli.py outreach --job-id ID
+    python cli.py track --job-id ID --status STATUS [--notes "..."]
+    python cli.py list [--min-score N]
+"""
+import argparse
+import json
+import os
+import sys
+
+import yaml
+from dotenv import load_dotenv
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+from sources import greenhouse, lever, ashby, manual  # noqa: E402
+from scrapers import google_ats  # noqa: E402
+from scoring import deterministic, ai_scorer  # noqa: E402
+import tailor as tailor_mod  # noqa: E402
+import outreach as outreach_mod  # noqa: E402
+import tracker  # noqa: E402
+import dashboard as dashboard_mod  # noqa: E402
+
+load_dotenv()
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+JOBS_FILE = os.path.join(DATA_DIR, "jobs_seen.json")
+TRACKER_FILE = os.path.join(DATA_DIR, "tracker.csv")
+HIDDEN_FILE = os.path.join(DATA_DIR, "hidden.json")
+PROFILE_FILE = os.path.join(os.path.dirname(__file__), "profile.json")
+TAILORED_DIR = os.path.join(DATA_DIR, "tailored")
+
+
+def load_profile():
+    with open(PROFILE_FILE) as f:
+        return json.load(f)
+
+
+def load_jobs():
+    if not os.path.exists(JOBS_FILE):
+        return {}
+    with open(JOBS_FILE) as f:
+        return json.load(f)
+
+
+def save_jobs(jobs: dict):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(JOBS_FILE, "w") as f:
+        json.dump(jobs, f, indent=2)
+
+
+def cmd_pull(args):
+    with open(args.companies) as f:
+        companies = yaml.safe_load(f) or {}
+
+    jobs = load_jobs()
+    new_count = 0
+
+    for token in companies.get("greenhouse", []):
+        try:
+            for j in greenhouse.fetch_jobs(token):
+                if j["job_id"] not in jobs:
+                    jobs[j["job_id"]] = j
+                    new_count += 1
+        except Exception as e:
+            print(f"  [warn] greenhouse/{token} failed: {e}")
+
+    for token in companies.get("lever", []):
+        try:
+            for j in lever.fetch_jobs(token):
+                if j["job_id"] not in jobs:
+                    jobs[j["job_id"]] = j
+                    new_count += 1
+        except Exception as e:
+            print(f"  [warn] lever/{token} failed: {e}")
+
+    for token in companies.get("ashby", []):
+        try:
+            for j in ashby.fetch_jobs(token):
+                if j["job_id"] not in jobs:
+                    jobs[j["job_id"]] = j
+                    new_count += 1
+        except Exception as e:
+            print(f"  [warn] ashby/{token} failed: {e}")
+
+    save_jobs(jobs)
+    print(f"Pulled. {new_count} new postings. {len(jobs)} total tracked.")
+
+
+def cmd_scrape(args):
+    profile = load_profile()
+    jobs = load_jobs()
+    new_count = 0
+    duplicate_count = 0
+
+    print("Discovering via Google site: search "
+          "(Greenhouse/Lever/Ashby/Workday/SmartRecruiters/Workable)...")
+    try:
+        discovered = google_ats.fetch_jobs(profile, max_queries=args.max_queries)
+    except KeyError:
+        print("  [error] ANTHROPIC_API_KEY not set -- google_ats needs it for web search")
+        discovered = []
+
+    for j in discovered:
+        existing = jobs.get(j["job_id"])
+        if existing:
+            duplicate_count += 1
+            sources = set(existing.get("also_found_on", [existing.get("source")]))
+            sources.add(j["source"])
+            existing["also_found_on"] = sorted(sources)
+            existing["duplicate"] = len(sources) > 1
+        else:
+            jobs[j["job_id"]] = j
+            new_count += 1
+
+    save_jobs(jobs)
+    print(f"Scrape complete. {new_count} new posting(s), {duplicate_count} duplicate(s) seen again. "
+          f"{len(jobs)} total tracked.")
+
+
+def cmd_add_manual(args):
+    jobs = load_jobs()
+    j = manual.add_manual_job(args.url, args.text, args.title or "", args.company or "")
+    jobs[j["job_id"]] = j
+    save_jobs(jobs)
+    print(f"Added manual job {j['job_id']}. Fill in title/company in data/jobs_seen.json if left blank.")
+
+
+def cmd_score(args):
+    profile = load_profile()
+    jobs = load_jobs()
+    targets = [args.job_id] if args.job_id else list(jobs.keys())
+
+    for jid in targets:
+        job = jobs.get(jid)
+        if not job:
+            print(f"  [skip] {jid} not found")
+            continue
+
+        det = deterministic.score_job(job, profile)
+        job["deterministic_score"] = det
+
+        try:
+            ai = ai_scorer.score_job(job, profile)
+            job["ai_score"] = ai
+        except KeyError:
+            print("  [warn] ANTHROPIC_API_KEY not set -- skipping AI scoring")
+            ai = None
+        except Exception as e:
+            print(f"  [warn] AI scoring failed for {jid}: {e}")
+            ai = None
+
+        jobs[jid] = job
+        det_line = f"det={det['composite_score']} ({det['best_track']})"
+        ai_line = f"ai={ai['fit_score']}" if ai and ai.get("fit_score") is not None else "ai=n/a"
+        print(f"{jid[:40]:40s} {job.get('title','')[:35]:35s} {det_line:28s} {ai_line}")
+
+    save_jobs(jobs)
+
+
+def cmd_tailor(args):
+    profile = load_profile()
+    jobs = load_jobs()
+    job = jobs.get(args.job_id)
+    if not job:
+        print(f"Job {args.job_id} not found. Run `list` to see known job IDs.")
+        return
+
+    result = tailor_mod.tailor_resume(job, profile)
+    os.makedirs(TAILORED_DIR, exist_ok=True)
+    out_path = os.path.join(TAILORED_DIR, f"{args.job_id}.json")
+    with open(out_path, "w") as f:
+        json.dump(result, f, indent=2)
+
+    if result.get("_standing_rules_violations"):
+        print(f"  [WARNING] {result['_WARNING']}")
+    print(f"Tailored content written to {out_path}")
+
+
+def cmd_outreach(args):
+    profile = load_profile()
+    jobs = load_jobs()
+    job = jobs.get(args.job_id)
+    if not job:
+        print(f"Job {args.job_id} not found.")
+        return
+
+    result = outreach_mod.build_outreach_brief(job, profile)
+    print(json.dumps(result, indent=2))
+
+
+def cmd_track(args):
+    jobs = load_jobs()
+    job = jobs.get(args.job_id, {})
+
+    if args.status == "applied" and job:
+        # Marking applied also hides same-company/same-role postings from the
+        # dashboard until that role is reposted -- see src/hidden.py.
+        tracker.mark_applied(TRACKER_FILE, HIDDEN_FILE, job)
+    else:
+        det = job.get("deterministic_score", {})
+        ai = job.get("ai_score", {})
+        tracker.upsert(
+            TRACKER_FILE,
+            args.job_id,
+            company=job.get("company"),
+            title=job.get("title"),
+            url=job.get("url"),
+            track=det.get("best_track"),
+            det_score=det.get("composite_score"),
+            ai_score=ai.get("fit_score"),
+            status=args.status,
+            notes=args.notes,
+        )
+    print(f"Tracked {args.job_id} as '{args.status}'")
+
+
+def cmd_applied(args):
+    if not os.path.exists(TRACKER_FILE):
+        print("No applications tracked yet.")
+        return
+    import csv
+    with open(TRACKER_FILE, newline="") as f:
+        rows = [r for r in csv.DictReader(f) if r["status"] == "applied"]
+    if not rows:
+        print("No applications tracked yet.")
+        return
+    rows.sort(key=lambda r: r["last_updated"], reverse=True)
+    for r in rows:
+        print(f"{r['job_id'][:38]:38s} {r['title'][:28]:28s} {r['company'][:18]:18s} "
+              f"applied {r['last_updated']}  {r['url']}")
+
+
+def cmd_dashboard(args):
+    jobs = load_jobs()
+    buckets = dashboard_mod.build_view(jobs, HIDDEN_FILE)
+    html_out = dashboard_mod.render_html(buckets)
+    out_path = os.path.join(DATA_DIR, "dashboard.html")
+    with open(out_path, "w") as f:
+        f.write(html_out)
+    total = sum(len(v) for v in buckets.values())
+    print(f"Static snapshot written to {out_path} ({total} jobs shown)")
+    print("For the interactive version (Mark Applied buttons that actually work):")
+    print("  python server.py")
+    print("  then open http://localhost:8765")
+
+
+def cmd_list(args):
+    jobs = load_jobs()
+    rows = []
+    for jid, job in jobs.items():
+        det = job.get("deterministic_score", {}).get("composite_score", -1)
+        ai = job.get("ai_score", {}).get("fit_score", -1)
+        rows.append((jid, job.get("title", ""), job.get("company", ""), det, ai))
+
+    rows.sort(key=lambda r: (r[3] if r[3] is not None else -1), reverse=True)
+    for jid, title, company, det, ai in rows:
+        if args.min_score and (det or 0) < args.min_score:
+            continue
+        print(f"{jid[:40]:40s} {title[:30]:30s} {company[:20]:20s} det={det} ai={ai}")
+
+
+def main():
+    p = argparse.ArgumentParser(description="Shiva's job search CLI")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("pull")
+    sp.add_argument("--companies", default="config/companies.yaml")
+    sp.set_defaults(func=cmd_pull)
+
+    sp = sub.add_parser("scrape", help="Discover fresh postings via Google site: search (Part 3b)")
+    sp.add_argument("--max-queries", type=int, default=8)
+    sp.set_defaults(func=cmd_scrape)
+
+    sp = sub.add_parser("add-manual")
+    sp.add_argument("--url", required=True)
+    sp.add_argument("--text", required=True)
+    sp.add_argument("--title")
+    sp.add_argument("--company")
+    sp.set_defaults(func=cmd_add_manual)
+
+    sp = sub.add_parser("score")
+    sp.add_argument("--job-id")
+    sp.set_defaults(func=cmd_score)
+
+    sp = sub.add_parser("tailor")
+    sp.add_argument("--job-id", required=True)
+    sp.set_defaults(func=cmd_tailor)
+
+    sp = sub.add_parser("outreach")
+    sp.add_argument("--job-id", required=True)
+    sp.set_defaults(func=cmd_outreach)
+
+    sp = sub.add_parser("track")
+    sp.add_argument("--job-id", required=True)
+    sp.add_argument("--status", required=True,
+                     choices=["scored", "applied", "screening", "interview", "rejected", "offer"])
+    sp.add_argument("--notes", default="")
+    sp.set_defaults(func=cmd_track)
+
+    sp = sub.add_parser("list")
+    sp.add_argument("--min-score", type=int)
+    sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("applied", help="Show every job you've marked applied")
+    sp.set_defaults(func=cmd_applied)
+
+    sp = sub.add_parser("dashboard", help="Write a static dashboard snapshot to data/dashboard.html")
+    sp.set_defaults(func=cmd_dashboard)
+
+    args = p.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,126 @@
+# ==============================================================================
+# Company career board tokens — used by src/sources/greenhouse.py, lever.py,
+# ashby.py to pull postings directly from each company's public ATS API.
+# No login needed, fully ToS-compliant (these are public read-only endpoints).
+# ==============================================================================
+#
+# HOW THIS WORKS:
+#   Greenhouse: boards-api.greenhouse.io/v1/boards/<TOKEN>/jobs
+#   Lever:      api.lever.co/v0/postings/<TOKEN>
+#   Ashby:      api.ashbyhq.com/posting-api/job-board/<TOKEN>
+#
+# NOTE ON ACCURACY:
+#   The tokens below are commonly known/publicly documented ones. I verified a
+#   sample live via web search (doordashusa confirmed working). I could NOT
+#   individually verify every single token below from this environment — a
+#   wrong token just silently 404s, it won't break anything.
+#
+#   FIRST THING TO ASK CLAUDE CODE TO DO: "Verify every token in this file by
+#   hitting the API live, remove or fix any that 404, and add 30-50 more
+#   companies you find by searching for AI/software/fintech company careers
+#   pages." Claude Code has live network access and can do this in minutes.
+#
+#   This list is a STARTER, not a ceiling. The Google `site:` search scraper
+#   (built separately, no token needed) is what makes this open-ended — it
+#   finds ANY company on these ATS platforms, not just the ones listed here.
+#
+# ==============================================================================
+
+greenhouse:
+  # Big Tech / Cloud
+  - stripe
+  - doordashusa
+  - airbnb
+  - pinterest
+  - reddit
+  - robinhood
+  - coinbase
+  - discord
+  - figma
+  - notion
+  - asana
+  - dropbox
+  - twilio
+  - okta
+  - datadog
+  - gitlab
+  - hashicorp
+  - cloudflare
+  - elastic
+  - mongodb
+
+  # AI / ML companies
+  - anthropic
+  - scaleai
+  - together
+  - perplexityai
+  - mistralai
+  - cohere
+  - runwayml
+  - hugging-face
+  - weightsandbiases
+  - anyscale
+  - replit
+
+  # Fintech (Tier 1 priority)
+  - plaid
+  - brex
+  - ramp
+  - chime
+  - affirm
+  - marqeta
+  - modernTreasury
+  - mercury
+
+  # Consulting / Enterprise
+  - palantir
+  - snowflake
+  - confluent
+
+  # Healthcare / Other
+  - oscarhealth
+  - devotedhealth
+  - benchling
+
+lever:
+  - netflix
+  - github
+  - lyft
+  - box
+  - eventbrite
+  - shopify
+  - webflow
+  - vercel
+  - retool
+  - amplitude
+  - sourcegraph
+  - loom
+  - postman
+  - segment
+
+ashby:
+  - linear
+  - vanta
+  - deel
+  - ramp
+  - openai
+  - rippling
+  - clay
+  - modal
+  - fireworks-ai
+  - assembled
+
+smartrecruiters:
+  # Add company names as they appear in smartrecruiters.com/<company> URLs
+  # - visa
+  # - ikea
+
+workday:
+  # Workday doesn't have a simple public API like the others — these get
+  # reached via the Google site: search scraper instead (myworkdayjobs.com)
+  # No token needed here; listed for reference only:
+  # - jpmorgan
+  # - bankofamerica
+  # - lockheedmartin
+  # - accenture
+  # - deloitte

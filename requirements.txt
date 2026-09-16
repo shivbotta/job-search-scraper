@@ -1,0 +1,24 @@
+# Core
+requests>=2.31
+python-dotenv>=1.0
+pyyaml>=6.0
+
+# AI scoring + tailoring
+anthropic>=0.40
+
+# Dashboard
+flask>=3.0
+
+# Browser automation (LinkedIn, Indeed, Workday, WayUp, ZipRecruiter, Glassdoor,
+# Simplify, YC, Jobright, Otta, Welcome to the Jungle, Built In)
+playwright>=1.40
+
+# HTML parsing fallback for simple/static sites
+beautifulsoup4>=4.12
+lxml>=5.0
+
+# PDF generation for tailored resumes
+reportlab>=4.0
+
+# Optional: email alerts
+# (smtplib is stdlib, no install needed)
