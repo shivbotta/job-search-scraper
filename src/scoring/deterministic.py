@@ -27,6 +27,21 @@ import datetime
 # judged against the harder end, not the easier one.
 _YEARS_PATTERN = re.compile(r"(\d+)\+?\s*(?:-\s*\d+\s*)?\+?\s*years?", re.IGNORECASE)
 
+# Seniority words in the TITLE itself -- confirmed live to be the dominant
+# signal in practice: a "Senior Data Engineer" posting frequently never
+# states an explicit "N years" requirement in the body text at all, so the
+# years-regex penalty alone completely missed it and let senior roles
+# outrank entry-level ones. Checked with word boundaries so this doesn't
+# false-positive on something like "Leadership" or "Directory".
+_SENIOR_TITLE_PATTERN = re.compile(
+    r"\b(senior|sr\.?|staff|principal|lead|director|vp|vice president|"
+    r"head\s+of|manager)\b", re.IGNORECASE
+)
+_JUNIOR_TITLE_PATTERN = re.compile(
+    r"\b(new\s+grad|entry[\s-]?level|junior|jr\.?|associate|intern|"
+    r"university\s+grad|campus)\b", re.IGNORECASE
+)
+
 
 def _clean_text(html: str) -> str:
     text = re.sub(r"<[^>]+>", " ", html or "")
@@ -57,7 +72,7 @@ def _recency_bonus(posted_at) -> int:
     return 0
 
 
-def _experience_penalty(text: str, ceiling_years: int) -> tuple[int, int | None]:
+def _years_penalty(text: str, ceiling_years: int) -> tuple[int, int | None]:
     """Never excludes -- just ranks a posting lower when it asks for more
     years than the profile's ceiling. Returns (penalty, required_years)."""
     years_mentioned = [int(m.group(1)) for m in _YEARS_PATTERN.finditer(text)]
@@ -70,6 +85,29 @@ def _experience_penalty(text: str, ceiling_years: int) -> tuple[int, int | None]
     overage = required - ceiling_years
     penalty = min(20, overage * 5)  # capped so it demotes, never zeroes out
     return penalty, required
+
+
+def _title_seniority_penalty(title: str) -> int:
+    """A senior-level title word is a stronger, more reliable seniority
+    signal than an explicit years-of-experience mention -- most "Senior"/
+    "Staff"/"Principal" postings never spell out a number at all. An
+    explicit junior/new-grad signal in the title overrides it (some
+    postings say things like "Senior year students welcome")."""
+    if _JUNIOR_TITLE_PATTERN.search(title):
+        return 0
+    if _SENIOR_TITLE_PATTERN.search(title):
+        return 20
+    return 0
+
+
+def _experience_penalty(text: str, title: str, ceiling_years: int) -> tuple[int, int | None]:
+    """Combines both seniority signals -- title wins when it fires (it's
+    the more reliable one), otherwise fall back to the years-in-body
+    penalty. Taking the max rather than summing them avoids double-
+    penalizing a posting that mentions seniority both ways."""
+    years_penalty, required_years = _years_penalty(text, ceiling_years)
+    title_penalty = _title_seniority_penalty(title)
+    return max(years_penalty, title_penalty), required_years
 
 
 def score_job(job: dict, profile: dict) -> dict:
@@ -101,7 +139,7 @@ def score_job(job: dict, profile: dict) -> dict:
     industry_bonus, industry_tier = _industry_bonus(text, profile.get("industry_priority", {}))
     recency_bonus = _recency_bonus(job.get("posted_at"))
     experience_penalty, required_years = _experience_penalty(
-        text, profile.get("experience_ceiling_years", 3)
+        text, job.get("title", ""), profile.get("experience_ceiling_years", 3)
     )
 
     base = round(0.7 * best_track["weighted_score"] + 0.3 * skill_pct)
