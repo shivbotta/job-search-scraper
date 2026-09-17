@@ -131,12 +131,24 @@ Do the following and return JSON with exactly these keys:
    monitoring," the bullet must contain the word "observability," not just
    describe monitoring. Do this for every direct/equivalent match you found.
 
+4. LENGTH LIMITS -- these are hard, and they exist because the resume is
+   typeset to one page and an over-long bullet wraps to three lines, which
+   reads as unedited. Write to fit:
+     - summary: at most 2 sentences, 280 characters TOTAL
+     - every experience bullet: at most 150 characters
+     - every project bullet: at most 140 characters
+     - at most 4 bullets per experience entry, 2 per project
+     - skills_to_surface_first: at most 22 skills
+   Tighten wording to hit these -- cut filler ("responsible for", "worked
+   on", "helped to"), not substance or keywords. Do NOT end bullets with a
+   period; keep punctuation consistent across all of them.
+
 {{
   "jd_keywords": ["<the real keyword/requirement set from step 1>"],
   "keyword_mapping": [
     {{"keyword": "...", "match_type": "direct|equivalent|none", "evidence": "<short note, empty string if none>"}}
   ],
-  "summary": "<2-3 sentence tailored summary, factual, no buzzword soup>",
+  "summary": "<<=2 sentences, <=280 chars, factual, no buzzword soup>",
   "experience": [
     {{"org": "KwikJobs", "title": "<from profile>", "dates": "<from profile>", "location": "<from profile>", "bullets": ["<reworded/reordered, from the REAL bullets only>"]}},
     {{"org": "HypeSquad", "title": "...", "dates": "...", "location": "...", "bullets": ["..."]}}
@@ -207,7 +219,8 @@ def tailor_resume(job: dict, profile: dict, pdf_out_path: str | None = None) -> 
         return result
 
     if pdf_out_path:
-        pdfgen.render_resume_pdf(pdf_out_path, profile, content)
+        layout = pdfgen.render_resume_pdf(pdf_out_path, profile, content)
+        result["layout"] = layout
         pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(pdf_out_path).pages)
         # A long line (e.g. the skills line) wraps across PDF lines, and
         # pypdf renders that wrap as a newline -- collapse whitespace so a
