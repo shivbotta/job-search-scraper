@@ -16,6 +16,7 @@ import tracker as tracker_mod
 import skillsgap
 
 MAX_AGE_DAYS = 30
+PAGE_SIZE = 25  # cards rendered per bucket before a "Load more" button appears
 
 BUCKET_ORDER = [
     "Posted in the last hour",
@@ -23,6 +24,16 @@ BUCKET_ORDER = [
     "This week",
     "This month",
 ]
+
+# Short, URL-safe keys for the pagination endpoint -- avoids passing the
+# raw display name (with spaces) through a query string.
+BUCKET_KEY_BY_NAME = {
+    "Posted in the last hour": "hour",
+    "Posted in the last 24 hours": "24h",
+    "This week": "week",
+    "This month": "month",
+}
+BUCKET_NAME_BY_KEY = {v: k for k, v in BUCKET_KEY_BY_NAME.items()}
 
 
 def _score_for_sort(job: dict):
@@ -203,6 +214,14 @@ def _render_brief_html(brief: dict) -> str:
     """
 
 
+def _load_more_button(bucket_key: str, next_offset: int, remaining: int) -> str:
+    return (
+        f'<button class="btn btn-load-more" data-bucket="{bucket_key}" '
+        f'data-offset="{next_offset}" onclick="loadMoreCards(this)">'
+        f'Load {min(remaining, PAGE_SIZE)} more ({remaining} remaining)</button>'
+    )
+
+
 def render_feed_tab(jobs: dict, hidden_path: str, tracker_path: str, sources_status: dict) -> str:
     buckets = build_view(jobs, hidden_path)
     brief = build_daily_brief(jobs, hidden_path, tracker_path, sources_status)
@@ -212,17 +231,47 @@ def render_feed_tab(jobs: dict, hidden_path: str, tracker_path: str, sources_sta
         bucket_jobs = buckets.get(name, [])
         if not bucket_jobs:
             continue
-        cards = "\n".join(_job_card_html(j) for j in bucket_jobs)
+        bucket_key = BUCKET_KEY_BY_NAME[name]
+        page = bucket_jobs[:PAGE_SIZE]
+        cards = "\n".join(_job_card_html(j) for j in page)
         loud_class = " loud-heading" if name == "Posted in the last hour" else ""
+        remaining = len(bucket_jobs) - len(page)
+        load_more = (f'<div class="load-more-row" id="load-more-{bucket_key}">'
+                      f'{_load_more_button(bucket_key, PAGE_SIZE, remaining)}</div>'
+                     ) if remaining > 0 else ""
         sections += (
             f'<h2 class="bucket-title{loud_class}">{htmlmod.escape(name)} '
-            f'<span class="count">({len(bucket_jobs)})</span></h2>\n{cards}\n'
+            f'<span class="count">({len(bucket_jobs)})</span></h2>\n'
+            f'<div class="bucket-cards" id="bucket-cards-{bucket_key}">{cards}</div>\n{load_more}\n'
         )
     if not sections:
         sections = ('<p class="empty">No jobs to show. Run <code>python cli.py scrape</code> '
                     'and <code>python cli.py score</code> first.</p>')
 
     return _render_brief_html(brief) + sections
+
+
+def render_more_cards(jobs: dict, hidden_path: str, bucket_key: str, offset: int) -> dict:
+    """Backs the /api/feed/more AJAX endpoint. Recomputes the same bucketed,
+    score-sorted view build_view already produces -- deterministic given
+    the same jobs dict, so slicing [offset:offset+PAGE_SIZE] lines up
+    exactly with what the initial page render already showed before it."""
+    bucket_name = BUCKET_NAME_BY_KEY.get(bucket_key)
+    if not bucket_name:
+        return {"html": "", "has_more": False, "next_offset": offset}
+
+    buckets = build_view(jobs, hidden_path)
+    bucket_jobs = buckets.get(bucket_name, [])
+    page = bucket_jobs[offset:offset + PAGE_SIZE]
+    html = "\n".join(_job_card_html(j) for j in page)
+    next_offset = offset + len(page)
+    remaining = len(bucket_jobs) - next_offset
+    return {
+        "html": html,
+        "has_more": remaining > 0,
+        "next_offset": next_offset,
+        "remaining": max(remaining, 0),
+    }
 
 
 def render_applied_tab(tracker_path: str) -> str:
@@ -384,6 +433,9 @@ def render_app_html(feed_html: str, applied_html: str, skills_gap_html: str, pro
   .btn:disabled {{ background: #999; cursor: default; }}
   .result {{ margin-top: 10px; font-size: 13px; white-space: pre-wrap; }}
   .empty {{ color: #777; margin-top: 40px; }}
+  .load-more-row {{ text-align: center; margin: 16px 0 8px; }}
+  .btn-load-more {{ background: white; border: 1px solid #bbb; padding: 8px 20px; }}
+  .btn-load-more:disabled {{ opacity: 0.6; }}
 
   table.applied-table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
   table.applied-table th, table.applied-table td {{ text-align: left; padding: 8px; border-bottom: 1px solid #eee; font-size: 13px; }}
@@ -412,6 +464,28 @@ function showTab(name, btn) {{
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
+}}
+
+function loadMoreCards(btn) {{
+  const bucket = btn.dataset.bucket;
+  const offset = btn.dataset.offset;
+  btn.disabled = true;
+  btn.textContent = 'Loading...';
+  fetch('/api/feed/more?bucket=' + encodeURIComponent(bucket) + '&offset=' + offset)
+    .then(r => r.json())
+    .then(data => {{
+      const container = document.getElementById('bucket-cards-' + bucket);
+      container.insertAdjacentHTML('beforeend', data.html);
+      const row = document.getElementById('load-more-' + bucket);
+      if (data.has_more) {{
+        btn.dataset.offset = data.next_offset;
+        btn.disabled = false;
+        btn.textContent = 'Load ' + Math.min(data.remaining, 25) + ' more (' + data.remaining + ' remaining)';
+      }} else {{
+        row.remove();
+      }}
+    }})
+    .catch(() => {{ btn.disabled = false; btn.textContent = 'Failed to load -- try again'; }});
 }}
 
 function markApplied(jobId) {{

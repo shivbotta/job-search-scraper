@@ -25,9 +25,7 @@ from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
 
-# TODO: replace with the real KwikJobs URL -- not in profile.json, so this
-# is a placeholder rather than a fabricated guess. Swap it in pdfgen.py.
-KWIKJOBS_URL = "https://kwikjobs.app"
+KWIKJOBS_URL = "https://kwikjobs.co/"
 HYPESQUAD_URL = "https://hypesquad.app"
 
 PAGE_MARGIN = 0.5 * inch

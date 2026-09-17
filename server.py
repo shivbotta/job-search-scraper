@@ -78,6 +78,15 @@ def index():
     return dashboard_mod.render_app_html(feed_html, applied_html, skills_gap_html, profile_html)
 
 
+@app.route("/api/feed/more")
+def api_feed_more():
+    bucket = request.args.get("bucket", "")
+    offset = request.args.get("offset", type=int, default=0)
+    jobs = load_jobs()
+    result = dashboard_mod.render_more_cards(jobs, HIDDEN_FILE, bucket, offset)
+    return jsonify(result)
+
+
 @app.route("/api/apply/<job_id>", methods=["POST"])
 def api_apply(job_id):
     jobs = load_jobs()
