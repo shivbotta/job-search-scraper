@@ -80,10 +80,15 @@ def index():
 
 @app.route("/api/feed/more")
 def api_feed_more():
+    """Serves both pagination and filtering -- a filter change re-requests
+    offset 0 with source/industry set and replaces the bucket's list."""
     bucket = request.args.get("bucket", "")
     offset = request.args.get("offset", type=int, default=0)
-    jobs = load_jobs()
-    result = dashboard_mod.render_more_cards(jobs, HIDDEN_FILE, bucket, offset)
+    source = request.args.get("source", "")
+    industry = request.args.get("industry", "")
+    result = dashboard_mod.render_more_cards(
+        load_jobs(), HIDDEN_FILE, bucket, offset, source=source, industry=industry
+    )
     return jsonify(result)
 
 
