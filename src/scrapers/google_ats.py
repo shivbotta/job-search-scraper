@@ -8,35 +8,30 @@ server-side web search tool (same ANTHROPIC_API_KEY already used for
 scoring/tailoring -- no separate search API key needed) to search each ATS
 domain for postings matching Shiva's target-track keywords.
 
-For hits on Greenhouse/Lever/Ashby/Workday we re-fetch the company's full
-board through the existing structured API modules (src/sources/*) so the
-record has real posted_at, location, and full JD text -- the search hit is
-only used to *discover the company* (token, or tenant/site for Workday),
-never as the job data itself. For SmartRecruiters/Workable there's no
-simple public API, so the posting page itself is fetched once (no login)
-for the JD text.
+Every hit is re-fetched through a structured public API in src/sources/
+so the record has a real posted_at, location, and full JD text -- the
+search hit is only used to *discover the company* (a board token, or
+tenant/site for Workday), never as the job data itself.
+
+SmartRecruiters and Workable used to be page-scraped instead, which
+captured no location, so the US filter silently dropped every one of those
+postings. Both now go through their public APIs like the rest.
 
 Read-only. No login, anywhere. Rate limited: 3-8s randomized delay between
 every outbound request, exponential backoff on errors.
 """
-import hashlib
 import os
 import random
 import re
 import time
 import datetime
 
-import requests
 import anthropic
 
-from sources import greenhouse, lever, ashby, workday
+from sources import greenhouse, lever, ashby, workday, smartrecruiters, workable
 
 MODEL = "claude-sonnet-4-6"
 
-# Domains searched. Greenhouse/Lever/Ashby/Workday hits get re-fetched
-# through the structured public APIs already in src/sources/; the rest
-# (SmartRecruiters/Workable) are fetched as plain pages since they have no
-# simple public JSON feed.
 ATS_PLATFORMS = [
     "boards.greenhouse.io",
     "jobs.lever.co",
@@ -50,14 +45,19 @@ STRUCTURED_FETCHERS = {
     "boards.greenhouse.io": greenhouse.fetch_jobs,
     "jobs.lever.co": lever.fetch_jobs,
     "jobs.ashbyhq.com": ashby.fetch_jobs,
+    "smartrecruiters.com": smartrecruiters.fetch_jobs,
+    "apply.workable.com": workable.fetch_jobs,
 }
 
-# Pulls the company token out of a matched URL for platforms with a
-# structured fetcher above.
+# Pulls the company token out of a matched URL.
 TOKEN_PATTERNS = {
     "boards.greenhouse.io": re.compile(r"boards\.greenhouse\.io/([^/?#]+)"),
     "jobs.lever.co": re.compile(r"jobs\.lever\.co/([^/?#]+)"),
     "jobs.ashbyhq.com": re.compile(r"jobs\.ashbyhq\.com/([^/?#]+)"),
+    # SmartRecruiters also serves "oneclick-ui/company/<Token>/..." apply URLs.
+    "smartrecruiters.com": re.compile(r"smartrecruiters\.com/(?:oneclick-ui/company/)?([^/?#]+)"),
+    # apply.workable.com/j/<shortcode> carries no account slug -- skip those.
+    "apply.workable.com": re.compile(r"apply\.workable\.com/(?!j/)([^/?#]+)"),
 }
 
 
@@ -134,35 +134,15 @@ def _search_platform(client: "anthropic.Anthropic", platform: str, sample_keywor
     return []
 
 
-def _is_excluded(title: str, excluded_keywords: list[str]) -> bool:
-    low = (title or "").lower()
-    return any(ek.lower() in low for ek in excluded_keywords)
-
-
-def _guess_company_from_url(platform: str, url: str) -> str:
-    """Pull the actual employer name out of a Workday/SmartRecruiters/Workable
-    URL. The company sits in different places per platform, so a generic
-    "last label before .com" regex would just return the platform's own
-    name (e.g. "myworkdayjobs") for every hit -- it has to be per-platform."""
-    if platform == "myworkdayjobs.com":
-        # <company>.wd#.myworkdayjobs.com/...
-        m = re.search(r"://([^.]+)\.wd\d+\.myworkdayjobs\.com", url)
-        return m.group(1) if m else url
-    # smartrecruiters.com/<Company>/... and workable.com/<company>/...
-    m = re.search(r"://[^/]+/([^/]+)/", url)
-    return m.group(1) if m else url
-
-
 def fetch_jobs(profile: dict, max_queries: int = 8, keywords_per_query: int = 4) -> list[dict]:
-    """Run the discovery scraper end to end. Returns normalized job dicts
-    ready to merge into data/jobs_seen.json, with excluded tracks already
-    dropped per the standing rule (never surface IT Support/SOC/etc.)."""
+    """Run the discovery scraper end to end. Returns normalized job dicts;
+    relevance/excluded-track filtering happens at merge time in cli.py
+    (src/relevance.py), the same gate every other source goes through."""
     headers = {}
     workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID")
     if workspace_id:
         headers["anthropic-workspace-id"] = workspace_id
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], default_headers=headers)
-    excluded_keywords = profile.get("excluded_tracks", {}).get("never_target", [])
     keyword_pool = _build_keyword_pool(profile)
 
     queries = []
@@ -225,32 +205,5 @@ def fetch_jobs(profile: dict, max_queries: int = 8, keywords_per_query: int = 4)
             except Exception as e:
                 print(f"  [warn] google_ats: {platform}/{token} fetch failed: {e}")
             _sleep()
-        else:
-            # No simple public API (SmartRecruiters/Workable) --
-            # fetch the posting page itself, once, no login.
-            try:
-                resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-                resp.raise_for_status()
-                jobs.append({
-                    "source": "google_ats",
-                    "company": _guess_company_from_url(platform, url),
-                    "job_id": f"gats-{hashlib.sha1(url.encode()).hexdigest()[:10]}",
-                    "title": meta["title"],
-                    "location": "",
-                    "url": url,
-                    "posted_at": "",
-                    "description_html": resp.text[:20000],
-                    "discovered_at": _now_iso(),
-                    "discovered_via": f"google_ats:{platform}",
-                })
-                print(f"  [ok] {platform}: fetched 1 posting page ({url})")
-            except Exception as e:
-                print(f"  [warn] google_ats: page fetch failed for {url}: {e}")
-            _sleep()
 
-    filtered = [j for j in jobs if not _is_excluded(j.get("title", ""), excluded_keywords)]
-    dropped = len(jobs) - len(filtered)
-    if dropped:
-        print(f"  [info] dropped {dropped} posting(s) matching excluded_tracks.never_target")
-
-    return filtered
+    return jobs

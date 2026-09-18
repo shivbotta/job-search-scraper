@@ -143,9 +143,26 @@ ashby:
   - teero
 
 smartrecruiters:
-  # Add company names as they appear in smartrecruiters.com/<company> URLs
-  # - visa
-  # - ikea
+  # Tokens are case-sensitive, exactly as in jobs.smartrecruiters.com/<Token>.
+  # Verified live with US postings. (Visa, Bosch, Square return 0 postings
+  # under these tokens; ACCESA and Ubisoft2 are live but have no US roles.)
+  - ServiceNow
+  - TheNielsenCompany
+  - IFS1
+  - Versant3
+  - Brilent
+  - Socotec
+
+workable:
+  # Account slug from apply.workable.com/<slug>. Verified live with US roles.
+  - huggingface
+  - opendatajobs
+  - innopeaktech
+  - enfos-inc
+  - applause-4
+  - reversinglabs
+  - languagewire
+  - io-global
 
 workday:
   # Part 3d: Workday's internal JSON API (src/sources/workday.py) needs

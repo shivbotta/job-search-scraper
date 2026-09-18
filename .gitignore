@@ -6,5 +6,8 @@ data/tracker.csv
 data/tailored/
 data/dashboard.html
 data/hidden.json
+data/dropped_postings.json
+data/ingest_log.jsonl
+data/source_status.json
 venv/
 .DS_Store

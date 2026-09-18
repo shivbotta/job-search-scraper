@@ -89,6 +89,40 @@ def _logout(page):
 
 CARD_SELECTOR = "li[data-occludable-job-id]"
 DESCRIPTION_SELECTOR = "div.jobs-description__content"
+# The detail panel's header line reads like "Long Beach, CA · Reposted 2
+# hours ago · Over 100 applicants". LinkedIn gives no machine-readable date
+# in this view, so the relative phrase is the only freshness signal.
+TOP_CARD_SELECTORS = [
+    ".job-details-jobs-unified-top-card__tertiary-description-container",
+    ".job-details-jobs-unified-top-card__primary-description-container",
+    ".jobs-unified-top-card",
+    ".jobs-search__job-details--container",
+]
+_RELATIVE = re.compile(r"(\d+)\s+(minute|hour|day|week|month)s?\s+ago", re.IGNORECASE)
+_UNIT_SECONDS = {"minute": 60, "hour": 3600, "day": 86400, "week": 604800, "month": 2592000}
+
+
+def _posted_at_from_relative(text: str) -> str:
+    """'2 hours ago' -> ISO timestamp. Returns "" when there's no match, so
+    the posting lands in the dashboard's "No posting date" group rather
+    than being given a made-up date."""
+    m = _RELATIVE.search(text or "")
+    if not m:
+        return ""
+    seconds = int(m.group(1)) * _UNIT_SECONDS[m.group(2).lower()]
+    posted = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=seconds)
+    return posted.isoformat(timespec="seconds")
+
+
+def _top_card_text(page) -> str:
+    for sel in TOP_CARD_SELECTORS:
+        loc = page.locator(sel).first
+        try:
+            if loc.count():
+                return loc.inner_text()[:600]
+        except Exception:
+            continue
+    return ""
 
 
 def _extract_cards(page, max_cards: int) -> list[dict]:
@@ -127,6 +161,7 @@ def _extract_cards(page, max_cards: int) -> list[dict]:
                 "url": url,
                 "job_id_attr": job_id_attr,
                 "description": description,
+                "posted_at": _posted_at_from_relative(_top_card_text(page)),
             })
         except Exception:
             continue
@@ -177,8 +212,7 @@ def fetch_jobs(keywords: list[str], max_keywords: int = 4, max_per_keyword: int 
                         "title": c["title"],
                         "location": c["location"],
                         "url": c["url"],
-                        "posted_at": "",  # LinkedIn shows relative time ("2 hours ago"),
-                                          # not a parseable timestamp, on this view
+                        "posted_at": c["posted_at"],
                         "description_html": c["description"],
                         "discovered_at": _now_iso(),
                         "discovered_via": "linkedin_search",

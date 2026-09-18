@@ -24,6 +24,7 @@ import tracker  # noqa: E402
 import outreach  # noqa: E402
 import tailor as tailor_mod  # noqa: E402
 import profile_updates  # noqa: E402
+import source_status  # noqa: E402
 
 load_dotenv()
 
@@ -32,6 +33,7 @@ JOBS_FILE = os.path.join(DATA_DIR, "jobs_seen.json")
 TRACKER_FILE = os.path.join(DATA_DIR, "tracker.csv")
 HIDDEN_FILE = os.path.join(DATA_DIR, "hidden.json")
 TAILORED_DIR = os.path.join(DATA_DIR, "tailored")
+STATUS_FILE = os.path.join(DATA_DIR, "source_status.json")
 PROFILE_FILE = os.path.join(os.path.dirname(__file__), "profile.json")
 
 app = Flask(__name__)
@@ -54,28 +56,46 @@ def load_profile():
         return json.load(f)
 
 
-def _sources_status() -> dict:
-    """No persistent health-check log exists yet -- this is an honest proxy
-    based on whether each source's required credentials are configured,
-    not a live ping. Good enough for the daily brief's "sources live" line
-    without building a separate tracking system for it."""
-    return {
-        "google site: search": "ANTHROPIC_API_KEY" in os.environ,
-        "Greenhouse/Lever/Ashby/Workday": True,  # no credentials needed
-        "LinkedIn": bool(os.environ.get("SCRAPER_LINKEDIN_USERNAME") and os.environ.get("SCRAPER_LINKEDIN_PASSWORD")),
-        "Indeed": bool(os.environ.get("SCRAPER_INDEED_USERNAME") and os.environ.get("SCRAPER_INDEED_PASSWORD")),
-    }
+def _read_json(path):
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
 
 
 @app.route("/")
 def index():
     jobs = load_jobs()
     profile = load_profile()
-    feed_html = dashboard_mod.render_feed_tab(jobs, HIDDEN_FILE, TRACKER_FILE, _sources_status())
-    applied_html = dashboard_mod.render_applied_tab(TRACKER_FILE)
-    skills_gap_html = dashboard_mod.render_skills_gap_tab(TAILORED_DIR)
-    profile_html = dashboard_mod.render_profile_tab(profile)
-    return dashboard_mod.render_app_html(feed_html, applied_html, skills_gap_html, profile_html)
+    applied_id = request.args.get("applied", "")
+    tab = request.args.get("tab", "feed")
+    feed_html = dashboard_mod.render_feed_tab(jobs, HIDDEN_FILE, TRACKER_FILE,
+                                              source_status.load(STATUS_FILE))
+    return dashboard_mod.render_app_html(
+        feed_html,
+        dashboard_mod.render_applied_tab(TRACKER_FILE),
+        dashboard_mod.render_skills_gap_tab(TAILORED_DIR),
+        dashboard_mod.render_profile_tab(profile),
+        quick_apply_html=dashboard_mod.render_quick_apply(profile),
+        banner_html=dashboard_mod.applied_banner(jobs.get(applied_id)) if applied_id else "",
+        initial_tab=tab,
+    )
+
+
+@app.route("/job/<job_id>")
+def job_page(job_id):
+    jobs = load_jobs()
+    job = jobs.get(job_id)
+    if not job:
+        return ('<p>That job is no longer in the feed (it may have been marked applied or '
+                'filtered out). <a href="/">Back to Jobs Feed</a></p>'), 404
+    job_dir = os.path.join(TAILORED_DIR, job_id)
+    return dashboard_mod.render_job_page(
+        job,
+        _read_json(os.path.join(job_dir, "report.json")),
+        _read_json(os.path.join(job_dir, "research.json")),
+        dashboard_mod.render_quick_apply(load_profile()),
+    )
 
 
 @app.route("/api/feed/more")
@@ -127,6 +147,10 @@ def api_research_tailor(job_id):
 
     job_dir = os.path.join(TAILORED_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
+    # Persisted so the /job/<id> page can show it later without re-paying
+    # for another research call.
+    with open(os.path.join(job_dir, "research.json"), "w") as f:
+        json.dump(research, f, indent=2)
     pdf_path = os.path.join(job_dir, "resume.pdf")
     try:
         tailor_result = tailor_mod.tailor_resume(job, profile, pdf_out_path=pdf_path)

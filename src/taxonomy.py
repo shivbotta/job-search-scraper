@@ -18,6 +18,8 @@ _SOURCE_LABELS = {
     "lever": "Lever",
     "ashby": "Ashby",
     "workday": "Workday",
+    "smartrecruiters": "SmartRecruiters",
+    "workable": "Workable",
     "linkedin": "LinkedIn",
     "indeed": "Indeed",
     "manual": "Added manually",

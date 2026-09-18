@@ -15,7 +15,7 @@ import datetime
 import html as htmlmod
 
 from datehelpers import parse_posted_at
-from scoring.bands import score_band
+from scoring.bands import fit_label, BAND_KEYS
 import hidden as hidden_mod
 import tracker as tracker_mod
 import skillsgap
@@ -43,14 +43,20 @@ BUCKET_KEY_BY_NAME = {
 }
 BUCKET_NAME_BY_KEY = {v: k for k, v in BUCKET_KEY_BY_NAME.items()}
 
-BAND_CLASS = {
-    "Excellent match": "excellent",
-    "Strong match": "strong",
-    "Worth applying": "worth",
-    "Stretch": "stretch",
-    "Long shot": "longshot",
-    "Unscored": "unscored",
+# Status-file keys -> the labels taxonomy.source_label() uses on cards, so
+# the sources panel and the filter chips name things the same way.
+STATUS_LABELS = {
+    "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby", "workday": "Workday",
+    "smartrecruiters": "SmartRecruiters", "workable": "Workable",
+    "linkedin": "LinkedIn", "indeed": "Indeed", "google_ats": "Google site: search",
 }
+
+# Boards named in the build spec that have no scraper yet. Listed on the
+# dashboard so a missing source reads as a known gap, not a silent failure.
+NOT_BUILT = ["ZipRecruiter", "Glassdoor", "Simplify", "Y Combinator", "Jobright",
+             "Otta", "Welcome to the Jungle", "Built In", "USAJOBS", "WayUp"]
+
+EXT = 'target="_blank" rel="noopener noreferrer"'
 
 
 # ----------------------------------------------------------------- data
@@ -130,25 +136,31 @@ def _apply_filters(bucket_jobs: list, source: str = "", industry: str = "") -> l
     return out
 
 
-def build_daily_brief(jobs: dict, hidden_path: str, tracker_path: str, sources_status: dict) -> dict:
+def build_daily_brief(jobs: dict, hidden_path: str, tracker_path: str, status: dict) -> dict:
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     today = now.date()
 
-    discovered_today = excellent = strong = worth_applying = 0
+    discovered_today = great = strong = decent = unrated = 0
     posted_1h = posted_24h = 0
+    per_source = {}
 
     for job in jobs.values():
         discovered_dt = parse_posted_at(job.get("discovered_at"))
         if discovered_dt and discovered_dt.date() == today:
             discovered_today += 1
 
-        band = score_band(_score_for_sort(job) if _score_for_sort(job) >= 0 else None)
-        if band == "Excellent match":
-            excellent += 1
-        elif band == "Strong match":
+        label = fit_label(job)
+        if label == "Great Fit":
+            great += 1
+        elif label == "Strong Fit":
             strong += 1
-        elif band == "Worth applying":
-            worth_applying += 1
+        elif label == "Decent Fit":
+            decent += 1
+        elif label == "Not rated yet":
+            unrated += 1
+
+        src = taxonomy.source_label(job)
+        per_source[src] = per_source.get(src, 0) + 1
 
         posted_dt = parse_posted_at(job.get("posted_at"))
         if posted_dt:
@@ -167,19 +179,40 @@ def build_daily_brief(jobs: dict, hidden_path: str, tracker_path: str, sources_s
     )
     awaiting_response = sum(1 for r in rows if r.get("status") in ("applied", "screening"))
 
+    # One row per source: jobs it has contributed, plus what its last run
+    # actually did (from data/source_status.json) -- so "LinkedIn is
+    # missing" can be told apart from "LinkedIn ran and got blocked".
+    sources = []
+    seen = set()
+    for key, label in STATUS_LABELS.items():
+        st = status.get(key)
+        if st is None and label not in per_source:
+            continue
+        seen.add(label)
+        sources.append({
+            "label": label,
+            "jobs": per_source.get(label, 0),
+            "state": (st or {}).get("state", "no run logged"),
+            "detail": (st or {}).get("detail", ""),
+            "last_run": (st or {}).get("last_run", ""),
+        })
+    for label, n in per_source.items():
+        if label not in seen:
+            sources.append({"label": label, "jobs": n, "state": "ok", "detail": "", "last_run": ""})
+    sources.sort(key=lambda s: -s["jobs"])
+
     return {
         "date_label": now.strftime("%a %b %d"),
         "discovered_today": discovered_today,
-        "excellent": excellent,
+        "great": great,
         "strong": strong,
-        "worth_applying": worth_applying,
+        "decent": decent,
+        "unrated": unrated,
         "posted_1h": posted_1h,
         "posted_24h": posted_24h,
         "applied_this_week": applied_this_week,
         "awaiting_response": awaiting_response,
-        "sources_live": sum(1 for ok in sources_status.values() if ok),
-        "sources_total": len(sources_status),
-        "failed_sources": [n for n, ok in sources_status.items() if not ok],
+        "sources": sources,
     }
 
 
@@ -195,16 +228,23 @@ def _job_card_html(job: dict) -> str:
     ai_score = ai.get("fit_score")
     det_score = det.get("composite_score")
 
-    band_score = ai_score if isinstance(ai_score, (int, float)) else det_score
-    band = score_band(band_score)
-    band_cls = BAND_CLASS.get(band, "unscored")
+    label = fit_label(job)
+    band_cls = BAND_KEYS.get(label, "unrated")
 
-    score_bits = []
+    # The label leads; the numbers sit one click away for anyone who wants
+    # them, written out in words rather than "AI 28 · KW 23".
+    detail_lines = []
     if isinstance(ai_score, (int, float)):
-        score_bits.append(f"AI {ai_score}")
+        detail_lines.append(f"<b>AI fit score {ai_score}/100</b> -- how well the role matches "
+                            "your experience and level overall.")
+    else:
+        detail_lines.append("<b>Not rated by AI yet.</b> Run Research + Tailor, or "
+                            "<code>python cli.py score --job-id ...</code>, to get a fit rating.")
     if isinstance(det_score, (int, float)):
-        score_bits.append(f"KW {det_score}")
-    score_text = " · ".join(score_bits) or "unscored"
+        detail_lines.append(f"Keyword match {det_score}/100 -- share of your profile's keywords "
+                            "that appear in the posting. Runs low by design, even for good matches.")
+    hover = (f"AI fit {ai_score}/100" if isinstance(ai_score, (int, float)) else "Not AI-rated") + \
+            (f" · keyword match {det_score}/100" if isinstance(det_score, (int, float)) else "")
 
     meta_bits = [b for b in [
         _esc(job.get("location", "")),
@@ -228,24 +268,26 @@ def _job_card_html(job: dict) -> str:
     if partial:
         notes += f'<p class="note note-partial">{partial}</p>'
 
+    url = _esc(job.get("url", "#"))
     return f"""
     <article class="card band-{band_cls}" id="card-{job_id}">
       <header class="card-top">
         <div class="card-ident">
           <div class="company">{_esc(taxonomy.company_label(job.get("company", "")))}</div>
-          <h3 class="role">{_esc(job.get("title", ""))}</h3>
+          <h3 class="role"><a href="{url}" {EXT}>{_esc(job.get("title", ""))}</a></h3>
         </div>
         <div class="card-score">
-          <span class="badge badge-{band_cls}">{_esc(band)}</span>
-          <span class="score-nums">{score_text}</span>
+          <button class="fit fit-{band_cls}" title="{_esc(hover)}"
+                  onclick="toggleScore('{job_id}')" aria-expanded="false">{_esc(label)}</button>
         </div>
       </header>
+      <div class="score-detail" id="score-{job_id}">{"<br>".join(detail_lines)}</div>
       <div class="meta">{" · ".join(meta_bits)} {dup}</div>
       {notes}
       <div class="actions">
         <button class="btn btn-primary" onclick="researchAndTailor('{job_id}')">Research + Tailor</button>
         <button class="btn btn-applied" onclick="markApplied('{job_id}')">Mark Applied</button>
-        <a class="btn btn-ghost" href="{_esc(job.get("url", "#"))}" target="_blank" rel="noopener">View posting</a>
+        <a class="btn btn-ghost" href="{url}" {EXT}>View posting</a>
       </div>
       <div class="result" id="result-{job_id}"></div>
     </article>
@@ -278,26 +320,39 @@ def _load_more_html(bucket_key: str, next_offset: int, remaining: int) -> str:
     )
 
 
-def render_feed_tab(jobs: dict, hidden_path: str, tracker_path: str, sources_status: dict) -> str:
-    buckets = build_view(jobs, hidden_path)
-    brief = build_daily_brief(jobs, hidden_path, tracker_path, sources_status)
+def _sources_html(sources: list) -> str:
+    rows = ""
+    for s in sources:
+        state = s["state"]
+        state_cls = "ok" if state == "ok" else ("warn" if state in ("blocked", "failed") else "idle")
+        title = _esc(f'{s["detail"]} {("· last run " + s["last_run"]) if s["last_run"] else ""}'.strip())
+        rows += (f'<div class="src" title="{title}"><span class="src-name">{_esc(s["label"])}</span>'
+                 f'<span class="src-n">{s["jobs"]:,}</span>'
+                 f'<span class="src-state src-{state_cls}">{_esc(state)}</span></div>')
+    rows += "".join(
+        f'<div class="src src-dim"><span class="src-name">{_esc(n)}</span>'
+        f'<span class="src-n">&ndash;</span><span class="src-state src-idle">not built</span></div>'
+        for n in NOT_BUILT
+    )
+    return f'<div class="sources"><div class="sources-head">Sources</div><div class="src-grid">{rows}</div></div>'
 
-    failed = ""
-    if brief["failed_sources"]:
-        failed = " · " + ", ".join(_esc(s) for s in brief["failed_sources"]) + " not configured"
+
+def render_feed_tab(jobs: dict, hidden_path: str, tracker_path: str, status: dict) -> str:
+    buckets = build_view(jobs, hidden_path)
+    brief = build_daily_brief(jobs, hidden_path, tracker_path, status)
 
     stats = [
         ("Discovered today", brief["discovered_today"], ""),
-        ("Excellent (80+)", brief["excellent"], ""),
-        ("Strong (65-79)", brief["strong"], ""),
-        ("Worth applying", brief["worth_applying"], ""),
+        ("Great fit", brief["great"], ""),
+        ("Strong fit", brief["strong"], ""),
+        ("Decent fit", brief["decent"], ""),
         ("Posted &lt; 1 hour", brief["posted_1h"], "is-urgent"),
         ("Posted &lt; 24 hours", brief["posted_24h"], ""),
         ("Applied this week", brief["applied_this_week"], ""),
         ("Awaiting response", brief["awaiting_response"], ""),
     ]
     stat_html = "".join(
-        f'<div class="stat {cls}"><div class="stat-n">{v}</div>'
+        f'<div class="stat {cls}"><div class="stat-n">{v:,}</div>'
         f'<div class="stat-l">{label}</div></div>'
         for label, v, cls in stats
     )
@@ -307,9 +362,10 @@ def render_feed_tab(jobs: dict, hidden_path: str, tracker_path: str, sources_sta
       <div class="brief-head">
         <span class="brief-title">Today</span>
         <span class="brief-date">{_esc(brief["date_label"])}</span>
-        <span class="brief-sources">Sources live {brief["sources_live"]}/{brief["sources_total"]}{failed}</span>
+        <span class="brief-sources">{brief["unrated"]:,} jobs not AI-rated yet</span>
       </div>
       <div class="stat-grid">{stat_html}</div>
+      {_sources_html(brief["sources"])}
     </section>
     """
 
@@ -399,7 +455,7 @@ def render_applied_tab(tracker_path: str) -> str:
           <td><select class="input" onchange="updateApplied('{jid}', 'status', this.value); this.closest('tr').dataset.status=this.value;">{options}</select></td>
           <td><input class="input" type="text" placeholder="Notes" value="{_esc(r.get('notes',''))}"
                      onchange="updateApplied('{jid}', 'notes', this.value)"></td>
-          <td><a class="btn btn-ghost btn-sm" href="{_esc(r.get('url','#'))}" target="_blank" rel="noopener">Open</a></td>
+          <td><a class="btn btn-ghost btn-sm" href="{_esc(r.get('url','#'))}" {EXT}>Open posting</a></td>
         </tr>"""
 
     filter_opts = "".join(f'<option value="{s}">{s}</option>' for s in statuses)
@@ -495,335 +551,644 @@ def render_profile_tab(profile: dict) -> str:
     """
 
 
-def render_app_html(feed_html: str, applied_html: str, skills_gap_html: str, profile_html: str) -> str:
+# ------------------------------------------------------------ page shell
+
+# Plain strings, not f-strings, so CSS/JS braces don't need doubling.
+_CSS = """
+  :root {
+    --bg: #F7F6F3; --surface: #FFFFFF; --border: #E4E1DB; --border-strong: #D5D1C8;
+    --ink: #17171A; --ink-2: #45454C; --muted: #8A867D;
+    --accent: #1B3A4B; --accent-hover: #142C39; --accent-weak: #ECF1F4;
+    --green: #2E6B4F; --green-weak: #EBF2ED; --warn: #7A5A26;
+    --radius: 3px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+         font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 22px 28px 80px; }
+  .t-muted { color: var(--muted); }
+
+  /* sticky top bar: always one click back to the feed, and Quick Apply */
+  .topbar { position: sticky; top: 0; z-index: 20; background: rgba(247,246,243,0.96);
+            border-bottom: 1px solid var(--border); backdrop-filter: saturate(1.2); }
+  .topbar-in { max-width: 1080px; margin: 0 auto; padding: 10px 28px;
+               display: flex; align-items: center; gap: 14px; }
+  .home { font-family: inherit; font-size: 13px; font-weight: 600; color: var(--ink);
+          background: var(--surface); border: 1px solid var(--border-strong);
+          border-radius: var(--radius); padding: 6px 12px; cursor: pointer; text-decoration: none; }
+  .home:hover { border-color: var(--accent); color: var(--accent); }
+  .topbar .brand { font-size: 13px; color: var(--muted); }
+  .topbar .spacer { flex: 1; }
+
+  .masthead { display: flex; align-items: baseline; justify-content: space-between;
+              padding: 10px 0 16px; }
+  .masthead h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .masthead .t-muted { font-size: 12px; }
+
+  .tabs { display: flex; gap: 26px; border-bottom: 1px solid var(--border); margin-bottom: 26px; }
+  .tab-btn { background: none; border: 0; padding: 0 0 12px; cursor: pointer;
+             font-size: 13.5px; color: var(--muted); font-family: inherit;
+             border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab-btn:hover { color: var(--ink-2); }
+  .tab-btn.active { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* confirmation banner after Mark Applied */
+  .banner { display: flex; align-items: center; gap: 12px; background: var(--green-weak);
+            border: 1px solid #C9DCCF; border-radius: var(--radius); padding: 11px 14px;
+            margin-bottom: 18px; font-size: 13px; color: #24533D; }
+  .banner .spacer { flex: 1; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+           background: var(--ink); color: #fff; border-radius: var(--radius);
+           padding: 10px 14px; font-size: 13px; display: none; gap: 12px; align-items: center;
+           z-index: 40; box-shadow: 0 6px 24px rgba(0,0,0,0.12); }
+  .toast.show { display: flex; }
+  .toast a, .toast button { color: #fff; font: inherit; background: none; border: 0;
+                            text-decoration: underline; cursor: pointer; padding: 0; }
+
+  /* daily brief */
+  .brief { background: var(--surface); border: 1px solid var(--border);
+           border-radius: var(--radius); padding: 20px 22px; margin-bottom: 30px; }
+  .brief-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 18px; }
+  .brief-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.10em;
+                 color: var(--muted); font-weight: 600; }
+  .brief-date { font-size: 12px; color: var(--ink-2); }
+  .brief-sources { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px 18px; }
+  .stat-n { font-size: 25px; font-weight: 600; letter-spacing: -0.02em;
+            font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .stat-l { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .stat.is-urgent .stat-n, .stat.is-urgent .stat-l { color: var(--accent); }
+  .sources { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .sources-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+                  color: var(--muted); margin-bottom: 10px; font-weight: 600; }
+  .src-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 22px; }
+  .src { display: flex; align-items: baseline; gap: 8px; font-size: 12px;
+         padding: 3px 0; border-bottom: 1px dotted var(--border); }
+  .src-name { color: var(--ink-2); flex: 1; }
+  .src-n { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+  .src-state { font-size: 10.5px; min-width: 54px; text-align: right; }
+  .src-ok { color: var(--green); }
+  .src-warn { color: var(--warn); font-weight: 600; }
+  .src-idle { color: var(--muted); }
+  .src-dim .src-name { color: var(--muted); }
+
+  /* buckets + filters */
+  .bucket { margin-bottom: 40px; }
+  .bucket-head { display: flex; align-items: center; gap: 10px;
+                 border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 14px; }
+  .bucket-head h2 { margin: 0; font-size: 11px; text-transform: uppercase;
+                    letter-spacing: 0.10em; color: var(--ink-2); font-weight: 600; }
+  .bucket-head.is-urgent h2 { color: var(--accent); }
+  .bucket-count { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .filters { margin-bottom: 16px; }
+  .filter-row { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 7px; }
+  .filter-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+                  color: var(--muted); padding-top: 5px; min-width: 58px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip { font-family: inherit; font-size: 12px; color: var(--ink-2); background: var(--surface);
+          border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 9px; cursor: pointer; }
+  .chip:hover { border-color: var(--border-strong); }
+  .chip.is-active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip-n { margin-left: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .chip.is-active .chip-n { color: rgba(255,255,255,0.7); }
+
+  /* cards */
+  .card { background: var(--surface); border: 1px solid var(--border);
+          border-left: 2px solid var(--border-strong);
+          border-radius: var(--radius); padding: 16px 18px; margin-bottom: 10px;
+          transition: opacity .25s; }
+  .card.band-great { border-left-color: #2A5E43; }
+  .card.band-strong { border-left-color: #1B3A4B; }
+  .card.band-decent { border-left-color: #5F7F8F; }
+  .card.band-shot { border-left-color: #A8A49B; }
+  .card.band-long, .card.band-unrated { border-left-color: #DDDAD3; }
+  .card-top { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
+  .company { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+  .role { margin: 1px 0 0; font-size: 13.5px; font-weight: 400; color: var(--ink-2); }
+  .role a { text-decoration: none; }
+  .role a:hover { text-decoration: underline; color: var(--accent); }
+  .card-score { text-align: right; white-space: nowrap; }
+
+  /* fit label: plain words, numbers one click away */
+  .fit { font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+         padding: 3px 9px; border-radius: var(--radius); border: 1px solid transparent; }
+  .fit-great { background: #E7EFE9; color: #2A5E43; border-color: #CFE0D6; }
+  .fit-strong { background: var(--accent-weak); color: var(--accent); border-color: #D3E0E7; }
+  .fit-decent { background: #EEF2F4; color: #3E5F6F; border-color: #DCE4E8; }
+  .fit-shot { background: #F2F1EE; color: #55534E; border-color: #E2E0DA; }
+  .fit-long { background: #F5F4F2; color: var(--muted); border-color: #E8E6E1; }
+  .fit-unrated { background: transparent; color: var(--muted); border-color: var(--border);
+                 font-weight: 500; }
+  .score-detail { display: none; margin-top: 10px; font-size: 12px; color: var(--ink-2);
+                  background: #FAF9F7; border: 1px solid var(--border); border-radius: var(--radius);
+                  padding: 9px 11px; line-height: 1.6; }
+  .score-detail.show { display: block; }
+
+  .meta { margin-top: 8px; font-size: 11.5px; color: var(--muted); }
+  .tag { display: inline-block; font-size: 10.5px; color: var(--ink-2); background: #F3F2EF;
+         border: 1px solid var(--border); border-radius: var(--radius); padding: 1px 6px; margin-left: 4px; }
+  /* Rationale text can run long; clamp so cards keep an even rhythm. */
+  .note { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-2);
+          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .note-partial { color: var(--accent); }
+  .actions { display: flex; gap: 7px; margin-top: 13px; flex-wrap: wrap; }
+  .result { margin-top: 11px; font-size: 12.5px; color: var(--ink-2); white-space: pre-wrap;
+            border-top: 1px solid var(--border); padding-top: 10px; display: none; }
+  .result.show { display: block; }
+
+  /* buttons */
+  .btn { font-family: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: var(--radius);
+         cursor: pointer; border: 1px solid transparent; text-decoration: none;
+         display: inline-block; line-height: 1.4; }
+  .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-applied { background: var(--surface); color: var(--green); border-color: #BFD4C6; }
+  .btn-applied:hover { background: var(--green-weak); }
+  .btn-ghost { background: var(--surface); color: var(--ink-2); border-color: var(--border); }
+  .btn-ghost:hover { border-color: var(--border-strong); }
+  .btn-sm { font-size: 11.5px; padding: 3px 9px; }
+  .btn:disabled { opacity: 0.55; cursor: default; }
+  .btn-more { background: var(--surface); color: var(--ink-2); border-color: var(--border); width: 100%; }
+  .btn-more:hover { border-color: var(--border-strong); }
+  .more-n { color: var(--muted); margin-left: 6px; font-variant-numeric: tabular-nums; }
+  .load-more { margin-top: 12px; }
+
+  /* panels + tables */
+  .panel { background: var(--surface); border: 1px solid var(--border);
+           border-radius: var(--radius); padding: 18px 20px; margin-bottom: 18px; }
+  .panel-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .panel-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }
+  .panel-head .input { margin-left: auto; }
+  .table { width: 100%; border-collapse: collapse; }
+  .table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+              color: var(--muted); font-weight: 600; padding: 0 10px 8px 0; border-bottom: 1px solid var(--border); }
+  .table td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+  .table tr:last-child td { border-bottom: 0; }
+  .t-company { font-weight: 600; }
+  .t-num { font-variant-numeric: tabular-nums; }
+  .effort { font-size: 11px; padding: 2px 7px; border-radius: var(--radius);
+            border: 1px solid var(--border); background: #F5F4F2; color: var(--ink-2); }
+  .effort-easy { background: #E7EFE9; color: #2A5E43; border-color: #CFE0D6; }
+  .effort-hard { background: #F4EFE2; color: #6E5A2E; border-color: #E6DCC6; }
+  .list { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
+  .list-compact li { margin: 3px 0; }
+  .footnote { font-size: 12px; }
+
+  /* forms */
+  .input { font-family: inherit; font-size: 13px; padding: 6px 9px; color: var(--ink);
+           background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .input:focus { outline: none; border-color: var(--accent); }
+  .form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .form-col { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; max-width: 420px; }
+  .form-col .input { width: 100%; }
+  .empty { color: var(--muted); padding: 30px 0; }
+  code { font-size: 12px; background: #F1F0ED; padding: 1px 5px; border-radius: var(--radius); }
+
+  /* quick apply side panel */
+  .qa-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 380px; max-width: 92vw;
+              background: var(--surface); border-left: 1px solid var(--border);
+              box-shadow: -8px 0 30px rgba(0,0,0,0.06); z-index: 30;
+              transform: translateX(100%); transition: transform .2s ease;
+              display: flex; flex-direction: column; }
+  .qa-panel.open { transform: translateX(0); }
+  .qa-head { padding: 18px 20px 12px; border-bottom: 1px solid var(--border); }
+  .qa-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .qa-head p { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .qa-close { float: right; background: none; border: 0; font-size: 12px; color: var(--muted);
+              cursor: pointer; font-family: inherit; }
+  .qa-body { overflow-y: auto; padding: 8px 20px 20px; }
+  .qa-row { display: flex; align-items: center; gap: 10px; padding: 9px 0;
+            border-bottom: 1px solid var(--border); }
+  .qa-k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+          color: var(--muted); width: 88px; flex-shrink: 0; }
+  .qa-v { font-size: 12.5px; color: var(--ink); flex: 1; word-break: break-all; }
+  .qa-copy { font-family: inherit; font-size: 11px; padding: 3px 9px; cursor: pointer;
+             background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+             color: var(--ink-2); min-width: 58px; }
+  .qa-copy:hover { border-color: var(--accent); color: var(--accent); }
+  .qa-copy.done { background: var(--green-weak); border-color: #BFD4C6; color: var(--green); }
+
+  /* job view page */
+  .job-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
+  .job-company { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
+  .job-title { font-size: 16px; color: var(--ink-2); margin-top: 2px; }
+  .kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 14px; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+  .copybox { display: flex; gap: 10px; align-items: flex-start; background: #FAF9F7;
+             border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px;
+             font-size: 13px; margin-bottom: 8px; }
+  .copybox div { flex: 1; white-space: pre-wrap; }
+  .resume-frame { width: 100%; height: 1000px; border: 1px solid var(--border);
+                  border-radius: var(--radius); background: #fff; }
+"""
+
+# Shared by the dashboard and the job view page.
+_SHARED_JS = """
+function copyText(btn, text) {
+  const done = () => {
+    btn.textContent = 'Copied'; btn.classList.add('done');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1400);
+  };
+  // localhost is a secure context, so the async clipboard API is available;
+  // the textarea fallback covers anything that still refuses it.
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done, () => legacyCopy(text, done));
+  } else {
+    legacyCopy(text, done);
+  }
+}
+function legacyCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) {}
+  document.body.removeChild(ta);
+}
+function toggleQuickApply(open) {
+  const p = document.getElementById('qa-panel');
+  p.classList.toggle('open', open === undefined ? !p.classList.contains('open') : open);
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') toggleQuickApply(false); });
+"""
+
+
+def render_quick_apply(profile: dict) -> str:
+    """Copy helper for application forms. Deliberately not autofill: a
+    local dashboard can't type into another site's form (different origin,
+    browser security model) -- that would take a separate browser
+    extension. The panel says so, so nobody expects otherwise."""
+    links = profile.get("links", {})
+    edu = profile.get("education", {})
+    exp = (profile.get("experience") or [{}])[0]
+    name = profile.get("name", "")
+    first, _, last = name.partition(" ")
+    fields = [
+        ("Full name", name), ("First name", first), ("Last name", last),
+        ("Email", profile.get("email", "")), ("Phone", profile.get("phone", "")),
+        ("Location", profile.get("location", "")),
+        ("LinkedIn", links.get("linkedin", "")), ("GitHub", links.get("github", "")),
+        ("Website", links.get("portfolio", "")), ("Hugging Face", links.get("huggingface", "")),
+        ("School", edu.get("school", "")), ("Degree", edu.get("degree", "")),
+        ("Graduated", edu.get("graduated", "")),
+        ("GPA", str(edu["gpa"]) if edu.get("gpa") else ""),
+        ("Current role", f'{exp.get("title", "")}, {exp.get("org", "")}' if exp.get("org") else ""),
+    ]
+    rows = ""
+    for label, value in fields:
+        if not value:
+            continue
+        js_value = _esc(value).replace("\\", "\\\\").replace("'", "\\'")
+        rows += (f'<div class="qa-row"><span class="qa-k">{_esc(label)}</span>'
+                 f'<span class="qa-v">{_esc(value)}</span>'
+                 f'<button class="qa-copy" onclick="copyText(this, \'{js_value}\')">Copy</button></div>')
+    return f"""
+    <aside class="qa-panel" id="qa-panel" aria-label="Quick Apply Info">
+      <div class="qa-head">
+        <button class="qa-close" onclick="toggleQuickApply(false)">Close</button>
+        <h2>Quick Apply Info &mdash; copy &amp; paste</h2>
+        <p>A copy helper, not autofill. This dashboard runs locally and can't fill in
+        forms on other websites &mdash; browsers block that between sites; it would need a
+        separate browser extension. Click Copy, then paste into the application form.</p>
+      </div>
+      <div class="qa-body">{rows}</div>
+    </aside>
+    """
+
+
+def _topbar(right_label: str = "") -> str:
+    return f"""
+    <div class="topbar"><div class="topbar-in">
+      <a class="home" href="/">&larr; Jobs Feed</a>
+      <span class="brand">{_esc(right_label)}</span>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" onclick="toggleQuickApply()">Quick Apply Info</button>
+    </div></div>
+    """
+
+
+def applied_banner(job: dict | None) -> str:
+    if not job:
+        return ""
+    who = f'{_esc(taxonomy.company_label(job.get("company", "")))} &mdash; {_esc(job.get("title", ""))}'
+    return f"""
+    <div class="banner" id="applied-banner">
+      <span>Marked as applied: <b>{who}</b>. It's now in the Applied tab.</span>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-sm" onclick="openTab('applied')">View in Applied</button>
+      <a class="btn btn-primary btn-sm" href="/">Back to Jobs Feed</a>
+    </div>
+    """
+
+
+def render_app_html(feed_html: str, applied_html: str, skills_gap_html: str, profile_html: str,
+                    quick_apply_html: str = "", banner_html: str = "", initial_tab: str = "feed") -> str:
     generated = datetime.datetime.now().strftime("%a %b %d, %-I:%M %p")
+    if initial_tab not in ("feed", "applied", "skills-gap", "profile"):
+        initial_tab = "feed"
+    act = lambda t: " active" if t == initial_tab else ""  # noqa: E731
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Dashboard</title>
-<style>
-  :root {{
-    --bg: #F7F6F3;
-    --surface: #FFFFFF;
-    --border: #E4E1DB;
-    --border-strong: #D5D1C8;
-    --ink: #17171A;
-    --ink-2: #45454C;
-    --muted: #8A867D;
-    --accent: #1B3A4B;
-    --accent-hover: #142C39;
-    --accent-weak: #ECF1F4;
-    --green: #2E6B4F;
-    --green-weak: #EBF2ED;
-    --radius: 3px;
-  }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    margin: 0; background: var(--bg); color: var(--ink);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
-    font-size: 14px; line-height: 1.5;
-    -webkit-font-smoothing: antialiased;
-  }}
-  .wrap {{ max-width: 1080px; margin: 0 auto; padding: 36px 28px 80px; }}
-
-  .masthead {{ display: flex; align-items: baseline; justify-content: space-between;
-               padding-bottom: 18px; }}
-  .masthead h1 {{ margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }}
-  .masthead .t-muted {{ font-size: 12px; }}
-  .t-muted {{ color: var(--muted); }}
-
-  /* tabs */
-  .tabs {{ display: flex; gap: 26px; border-bottom: 1px solid var(--border); margin-bottom: 26px; }}
-  .tab-btn {{ background: none; border: 0; padding: 0 0 12px; cursor: pointer;
-              font-size: 13.5px; color: var(--muted); font-family: inherit;
-              border-bottom: 2px solid transparent; margin-bottom: -1px; }}
-  .tab-btn:hover {{ color: var(--ink-2); }}
-  .tab-btn.active {{ color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }}
-  .tab-content {{ display: none; }}
-  .tab-content.active {{ display: block; }}
-
-  /* daily brief */
-  .brief {{ background: var(--surface); border: 1px solid var(--border);
-            border-radius: var(--radius); padding: 20px 22px; margin-bottom: 30px; }}
-  .brief-head {{ display: flex; align-items: baseline; gap: 10px; margin-bottom: 18px; }}
-  .brief-title {{ font-size: 11px; text-transform: uppercase; letter-spacing: 0.10em;
-                  color: var(--muted); font-weight: 600; }}
-  .brief-date {{ font-size: 12px; color: var(--ink-2); }}
-  .brief-sources {{ margin-left: auto; font-size: 11.5px; color: var(--muted); }}
-  .stat-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px 18px; }}
-  .stat-n {{ font-size: 25px; font-weight: 600; letter-spacing: -0.02em;
-             font-variant-numeric: tabular-nums; line-height: 1.15; }}
-  .stat-l {{ font-size: 11.5px; color: var(--muted); margin-top: 2px; }}
-  .stat.is-urgent .stat-n {{ color: var(--accent); }}
-  .stat.is-urgent .stat-l {{ color: var(--accent); }}
-
-  /* buckets */
-  .bucket {{ margin-bottom: 40px; }}
-  .bucket-head {{ display: flex; align-items: center; gap: 10px;
-                  border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 14px; }}
-  .bucket-head h2 {{ margin: 0; font-size: 11px; text-transform: uppercase;
-                     letter-spacing: 0.10em; color: var(--ink-2); font-weight: 600; }}
-  .bucket-head.is-urgent h2 {{ color: var(--accent); }}
-  .bucket-count {{ font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }}
-
-  /* filters */
-  .filters {{ margin-bottom: 16px; }}
-  .filter-row {{ display: flex; align-items: flex-start; gap: 12px; margin-bottom: 7px; }}
-  .filter-label {{ font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
-                   color: var(--muted); padding-top: 5px; min-width: 58px; }}
-  .chips {{ display: flex; flex-wrap: wrap; gap: 5px; }}
-  .chip {{ font-family: inherit; font-size: 12px; color: var(--ink-2);
-           background: var(--surface); border: 1px solid var(--border);
-           border-radius: var(--radius); padding: 4px 9px; cursor: pointer; }}
-  .chip:hover {{ border-color: var(--border-strong); }}
-  .chip.is-active {{ background: var(--accent); border-color: var(--accent); color: #fff; }}
-  .chip-n {{ margin-left: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }}
-  .chip.is-active .chip-n {{ color: rgba(255,255,255,0.7); }}
-
-  /* cards */
-  .card {{ background: var(--surface); border: 1px solid var(--border);
-           border-left: 2px solid var(--border-strong);
-           border-radius: var(--radius); padding: 16px 18px; margin-bottom: 10px; }}
-  .card.band-excellent {{ border-left-color: #2A5E43; }}
-  .card.band-strong {{ border-left-color: #1B3A4B; }}
-  .card.band-worth {{ border-left-color: #8A7433; }}
-  .card.band-stretch {{ border-left-color: #A8A49B; }}
-  .card.band-longshot {{ border-left-color: #DDDAD3; }}
-  .card-top {{ display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }}
-  .company {{ font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }}
-  .role {{ margin: 1px 0 0; font-size: 13.5px; font-weight: 400; color: var(--ink-2); }}
-  .card-score {{ text-align: right; white-space: nowrap; }}
-  .badge {{ display: inline-block; font-size: 10.5px; letter-spacing: 0.02em;
-            padding: 2px 7px; border-radius: var(--radius); border: 1px solid transparent; }}
-  .badge-excellent {{ background: #E7EFE9; color: #2A5E43; border-color: #CFE0D6; }}
-  .badge-strong {{ background: var(--accent-weak); color: var(--accent); border-color: #D3E0E7; }}
-  .badge-worth {{ background: #F4EFE2; color: #6E5A2E; border-color: #E6DCC6; }}
-  .badge-stretch {{ background: #F0EFEC; color: #55534E; border-color: #E2E0DA; }}
-  .badge-longshot {{ background: #F5F4F2; color: var(--muted); border-color: #E8E6E1; }}
-  .badge-unscored {{ background: #F5F4F2; color: var(--muted); border-color: #E8E6E1; }}
-  .score-nums {{ display: block; margin-top: 4px; font-size: 11px; color: var(--muted);
-                 font-variant-numeric: tabular-nums; }}
-  .meta {{ margin-top: 8px; font-size: 11.5px; color: var(--muted); }}
-  .tag {{ display: inline-block; font-size: 10.5px; color: var(--ink-2);
-          background: #F3F2EF; border: 1px solid var(--border); border-radius: var(--radius);
-          padding: 1px 6px; margin-left: 4px; }}
-  /* Rationale text can run long; clamp so cards stay scannable and the
-     list keeps an even rhythm rather than each card being a different height. */
-  .note {{ margin: 8px 0 0; font-size: 12.5px; color: var(--ink-2);
-           display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-           overflow: hidden; }}
-  .note-partial {{ color: var(--accent); }}
-  .actions {{ display: flex; gap: 7px; margin-top: 13px; }}
-  .result {{ margin-top: 11px; font-size: 12.5px; color: var(--ink-2); white-space: pre-wrap;
-             border-top: 1px solid var(--border); padding-top: 10px; display: none; }}
-  .result.show {{ display: block; }}
-
-  /* buttons */
-  .btn {{ font-family: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: var(--radius);
-          cursor: pointer; border: 1px solid transparent; text-decoration: none;
-          display: inline-block; line-height: 1.4; }}
-  .btn-primary {{ background: var(--accent); color: #fff; border-color: var(--accent); }}
-  .btn-primary:hover {{ background: var(--accent-hover); }}
-  .btn-applied {{ background: var(--surface); color: var(--green); border-color: #BFD4C6; }}
-  .btn-applied:hover {{ background: var(--green-weak); }}
-  .btn-ghost {{ background: var(--surface); color: var(--ink-2); border-color: var(--border); }}
-  .btn-ghost:hover {{ border-color: var(--border-strong); }}
-  .btn-sm {{ font-size: 11.5px; padding: 3px 9px; }}
-  .btn:disabled {{ opacity: 0.55; cursor: default; }}
-  .btn-more {{ background: var(--surface); color: var(--ink-2); border-color: var(--border); width: 100%; }}
-  .btn-more:hover {{ border-color: var(--border-strong); }}
-  .more-n {{ color: var(--muted); margin-left: 6px; font-variant-numeric: tabular-nums; }}
-  .load-more {{ margin-top: 12px; }}
-
-  /* panels + tables */
-  .panel {{ background: var(--surface); border: 1px solid var(--border);
-            border-radius: var(--radius); padding: 18px 20px; margin-bottom: 18px; }}
-  .panel-head {{ display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }}
-  .panel-head h2 {{ margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }}
-  .panel-head .input {{ margin-left: auto; }}
-  .table {{ width: 100%; border-collapse: collapse; }}
-  .table th {{ text-align: left; font-size: 10.5px; text-transform: uppercase;
-               letter-spacing: 0.08em; color: var(--muted); font-weight: 600;
-               padding: 0 10px 8px 0; border-bottom: 1px solid var(--border); }}
-  .table td {{ padding: 9px 10px 9px 0; border-bottom: 1px solid var(--border); font-size: 13px;
-               vertical-align: middle; }}
-  .table tr:last-child td {{ border-bottom: 0; }}
-  .t-company {{ font-weight: 600; }}
-  .t-num {{ font-variant-numeric: tabular-nums; }}
-  .effort {{ font-size: 11px; padding: 2px 7px; border-radius: var(--radius);
-             border: 1px solid var(--border); background: #F5F4F2; color: var(--ink-2); }}
-  .effort-easy {{ background: #E7EFE9; color: #2A5E43; border-color: #CFE0D6; }}
-  .effort-hard {{ background: #F4EFE2; color: #6E5A2E; border-color: #E6DCC6; }}
-  .list {{ margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); }}
-  .list-compact li {{ margin: 3px 0; }}
-  .footnote {{ font-size: 12px; }}
-
-  /* forms */
-  .input {{ font-family: inherit; font-size: 13px; padding: 6px 9px; color: var(--ink);
-            background: var(--surface); border: 1px solid var(--border);
-            border-radius: var(--radius); }}
-  .input:focus {{ outline: none; border-color: var(--accent); }}
-  .form-row {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
-  .form-col {{ display: flex; flex-direction: column; gap: 8px; align-items: flex-start; max-width: 420px; }}
-  .form-col .input {{ width: 100%; }}
-  .empty {{ color: var(--muted); padding: 30px 0; }}
-  code {{ font-size: 12px; background: #F1F0ED; padding: 1px 5px; border-radius: var(--radius); }}
-</style>
+<style>{_CSS}</style>
 </head>
 <body>
+{_topbar()}
 <div class="wrap">
   <div class="masthead">
     <h1>Job Dashboard</h1>
     <span class="t-muted">{generated}</span>
   </div>
-
+  {banner_html}
   <nav class="tabs">
-    <button class="tab-btn active" onclick="showTab('feed', this)">Jobs Feed</button>
-    <button class="tab-btn" onclick="showTab('applied', this)">Applied</button>
-    <button class="tab-btn" onclick="showTab('skills-gap', this)">Skills Gap</button>
-    <button class="tab-btn" onclick="showTab('profile', this)">Profile</button>
+    <button class="tab-btn{act('feed')}" data-tab="feed" onclick="openTab('feed')">Jobs Feed</button>
+    <button class="tab-btn{act('applied')}" data-tab="applied" onclick="openTab('applied')">Applied</button>
+    <button class="tab-btn{act('skills-gap')}" data-tab="skills-gap" onclick="openTab('skills-gap')">Skills Gap</button>
+    <button class="tab-btn{act('profile')}" data-tab="profile" onclick="openTab('profile')">Profile</button>
   </nav>
 
-  <div id="tab-feed" class="tab-content active">{feed_html}</div>
-  <div id="tab-applied" class="tab-content">{applied_html}</div>
-  <div id="tab-skills-gap" class="tab-content">{skills_gap_html}</div>
-  <div id="tab-profile" class="tab-content">{profile_html}</div>
+  <div id="tab-feed" class="tab-content{act('feed')}">{feed_html}</div>
+  <div id="tab-applied" class="tab-content{act('applied')}">{applied_html}</div>
+  <div id="tab-skills-gap" class="tab-content{act('skills-gap')}">{skills_gap_html}</div>
+  <div id="tab-profile" class="tab-content{act('profile')}">{profile_html}</div>
 </div>
+{quick_apply_html}
+<div class="toast" id="toast"><span id="toast-msg"></span>
+  <button onclick="openTab('applied')">View in Applied</button></div>
 
 <script>
-function showTab(name, btn) {{
-  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  btn.classList.add('active');
-}}
+{_SHARED_JS}
+{_DASHBOARD_JS}
+</script>
+</body>
+</html>"""
 
-function feedQuery(bucket, offset) {{
+
+_DASHBOARD_JS = """
+let appliedStale = false;
+
+function openTab(name) {
+  // The Applied tab is rendered server-side; after marking something
+  // applied in place, fetch a fresh page for it rather than show stale rows.
+  if (name === 'applied' && appliedStale) { location.href = '/?tab=applied'; return; }
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el =>
+    el.classList.toggle('active', el.dataset.tab === name));
+  document.getElementById('tab-' + name).classList.add('active');
+  window.scrollTo({top: 0});
+}
+
+function toggleScore(jobId) {
+  document.getElementById('score-' + jobId).classList.toggle('show');
+}
+
+function feedQuery(bucket, offset) {
   const sec = document.getElementById('bucket-' + bucket);
-  const p = new URLSearchParams({{bucket: bucket, offset: offset}});
+  const p = new URLSearchParams({bucket: bucket, offset: offset});
   if (sec.dataset.source) p.set('source', sec.dataset.source);
   if (sec.dataset.industry) p.set('industry', sec.dataset.industry);
   return '/api/feed/more?' + p.toString();
-}}
+}
 
-function setFilter(btn, bucket, kind, value) {{
+function setFilter(btn, bucket, kind, value) {
   const sec = document.getElementById('bucket-' + bucket);
   sec.dataset[kind] = value;
   sec.querySelectorAll('.chips[data-kind="' + kind + '"] .chip')
      .forEach(c => c.classList.toggle('is-active', c.dataset.value === value));
-
   const cards = document.getElementById('bucket-cards-' + bucket);
   cards.style.opacity = '0.45';
   fetch(feedQuery(bucket, 0))
     .then(r => r.json())
-    .then(data => {{
+    .then(data => {
       cards.innerHTML = data.html || '<p class="empty">No jobs match these filters.</p>';
       cards.style.opacity = '1';
       document.getElementById('count-' + bucket).textContent = data.total;
       document.getElementById('load-more-' + bucket).innerHTML = data.load_more_html || '';
-    }})
-    .catch(() => {{ cards.style.opacity = '1'; }});
-}}
+    })
+    .catch(() => { cards.style.opacity = '1'; });
+}
 
-function loadMoreCards(btn) {{
+function loadMoreCards(btn) {
   const bucket = btn.dataset.bucket;
-  btn.disabled = true;
-  btn.textContent = 'Loading...';
+  btn.disabled = true; btn.textContent = 'Loading...';
   fetch(feedQuery(bucket, btn.dataset.offset))
     .then(r => r.json())
-    .then(data => {{
-      document.getElementById('bucket-cards-' + bucket)
-              .insertAdjacentHTML('beforeend', data.html);
+    .then(data => {
+      document.getElementById('bucket-cards-' + bucket).insertAdjacentHTML('beforeend', data.html);
       document.getElementById('load-more-' + bucket).innerHTML = data.load_more_html || '';
-    }})
-    .catch(() => {{ btn.disabled = false; btn.textContent = 'Retry'; }});
-}}
+    })
+    .catch(() => { btn.disabled = false; btn.textContent = 'Retry'; });
+}
 
-function markApplied(jobId) {{
-  // Reload on success: Applied, the brief counts and hide-until-reposted on
-  // the feed all render server-side per page load.
-  fetch('/api/apply/' + jobId, {{ method: 'POST' }})
+function markApplied(jobId) {
+  // Stays on the feed at the same scroll position: the card fades out and a
+  // toast confirms, instead of a full reload that throws away your place.
+  fetch('/api/apply/' + jobId, { method: 'POST' })
     .then(r => r.json())
-    .then(data => data.ok ? location.reload()
-                          : alert('Failed: ' + (data.error || 'unknown error')))
+    .then(data => {
+      if (!data.ok) { alert('Failed: ' + (data.error || 'unknown error')); return; }
+      appliedStale = true;
+      const card = document.getElementById('card-' + jobId);
+      const who = card ? card.querySelector('.company').textContent : 'Job';
+      if (card) { card.style.opacity = '0'; setTimeout(() => card.remove(), 260); }
+      document.getElementById('toast-msg').textContent = 'Marked applied: ' + who;
+      const t = document.getElementById('toast');
+      t.classList.add('show');
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => t.classList.remove('show'), 6000);
+    })
     .catch(() => alert('Could not reach the local server.'));
-}}
+}
 
-function researchAndTailor(jobId) {{
+function researchAndTailor(jobId) {
   const el = document.getElementById('result-' + jobId);
   el.classList.add('show');
   el.textContent = 'Researching and tailoring... up to a minute.';
-  fetch('/api/research-tailor/' + jobId, {{ method: 'POST' }})
+  fetch('/api/research-tailor/' + jobId, { method: 'POST' })
     .then(r => r.json())
-    .then(data => {{
-      if (!data.ok) {{ el.textContent = 'Failed: ' + (data.error || 'unknown error'); return; }}
-      const t = data.tailor || {{}}, r2 = data.research || {{}};
+    .then(data => {
+      if (!data.ok) { el.textContent = 'Failed: ' + (data.error || 'unknown error'); return; }
+      const t = data.tailor || {}, r2 = data.research || {};
       let out = '';
       if (t.baseline_coverage_pct !== undefined)
-        out += 'Keyword coverage ' + t.baseline_coverage_pct + '% → ' + (t.tailored_coverage_pct ?? '?') + '%\\n';
+        out += 'Keyword coverage ' + t.baseline_coverage_pct + '% -> ' + (t.tailored_coverage_pct ?? '?') + '%\\n';
       if (t.honest_gaps && t.honest_gaps.length)
         out += 'Gaps: ' + t.honest_gaps.slice(0, 3).join('; ') + '\\n';
       if (r2.company_brief) out += r2.company_brief + '\\n';
-      if (r2.contacts && r2.contacts.length)
-        out += 'Contacts: ' + r2.contacts.map(c => c.name + ' (' + c.title + ')').join(', ') + '\\n';
       el.textContent = out || 'Done.';
-      if (t.pdf_url) {{
-        const a = document.createElement('a');
-        a.href = t.pdf_url; a.target = '_blank'; a.className = 'btn btn-ghost btn-sm';
-        a.textContent = 'Open tailored resume';
-        el.appendChild(document.createElement('br'));
-        el.appendChild(a);
-      }}
-    }})
-    .catch(() => {{ el.textContent = 'Could not reach the local server.'; }});
-}}
+      const a = document.createElement('a');
+      a.href = '/job/' + encodeURIComponent(jobId);
+      a.className = 'btn btn-primary btn-sm';
+      a.textContent = 'Open full research + resume';
+      el.appendChild(document.createElement('br'));
+      el.appendChild(a);
+    })
+    .catch(() => { el.textContent = 'Could not reach the local server.'; });
+}
 
-function updateApplied(jobId, field, value) {{
-  const body = {{}}; body[field] = value;
-  fetch('/api/applied/' + jobId, {{
-    method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(body)
-  }});
-}}
+function updateApplied(jobId, field, value) {
+  const body = {}; body[field] = value;
+  fetch('/api/applied/' + jobId, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  });
+}
 
-function filterApplied() {{
+function filterApplied() {
   const val = document.getElementById('applied-filter').value;
-  document.querySelectorAll('#applied-table tbody tr').forEach(row => {{
+  document.querySelectorAll('#applied-table tbody tr').forEach(row => {
     row.style.display = (!val || row.dataset.status === val) ? '' : 'none';
-  }});
-}}
+  });
+}
 
-function postProfile(url, payload) {{
-  return fetch(url, {{
-    method: 'POST', headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify(payload)
-  }}).then(() => location.reload());
-}}
-
-function addSkill(ev) {{
+function postProfile(url, payload) {
+  return fetch(url, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+  }).then(() => { location.href = '/?tab=profile'; });
+}
+function addSkill(ev) {
   ev.preventDefault();
-  postProfile('/api/profile/skill', {{
-    group: document.getElementById('skill-group').value,
-    skill: document.getElementById('skill-name').value
-  }});
+  postProfile('/api/profile/skill', { group: document.getElementById('skill-group').value,
+                                       skill: document.getElementById('skill-name').value });
   return false;
-}}
-
-function addCert(ev) {{
+}
+function addCert(ev) {
   ev.preventDefault();
-  postProfile('/api/profile/cert', {{ name: document.getElementById('cert-name').value }});
+  postProfile('/api/profile/cert', { name: document.getElementById('cert-name').value });
   return false;
-}}
-
-function addProject(ev) {{
+}
+function addProject(ev) {
   ev.preventDefault();
-  postProfile('/api/profile/project', {{
-    name: document.getElementById('project-name').value,
+  postProfile('/api/profile/project', { name: document.getElementById('project-name').value,
     description: document.getElementById('project-desc').value,
-    link: document.getElementById('project-link').value
-  }});
+    link: document.getElementById('project-link').value });
   return false;
+}
+"""
+
+
+def render_job_page(job: dict, report: dict | None, research: dict | None,
+                    quick_apply_html: str) -> str:
+    """Full view of one job's research + tailored resume, with a persistent
+    way back to the feed -- the output used to exist only as a few lines of
+    text inside the card."""
+    job_id = _esc(job.get("job_id", ""))
+    url = _esc(job.get("url", "#"))
+    label = fit_label(job)
+    ai = job.get("ai_score") or {}
+
+    def copybox(text):
+        if not text:
+            return ""
+        js = _esc(text).replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+        return (f'<div class="copybox"><div>{_esc(text)}</div>'
+                f'<button class="qa-copy" onclick="copyText(this, \'{js}\')">Copy</button></div>')
+
+    if research and not research.get("error"):
+        contacts = "".join(
+            f'<li><b>{_esc(c.get("name",""))}</b>, {_esc(c.get("title",""))} '
+            f'<span class="t-muted">({_esc(c.get("confidence",""))} confidence, {_esc(c.get("source",""))})</span>'
+            + (f' &middot; <a href="{_esc(c["linkedin_url"])}" {EXT}>LinkedIn</a>' if c.get("linkedin_url") else "")
+            + "</li>"
+            for c in research.get("contacts") or []
+        ) or '<li class="t-muted">No contact found with solid public evidence.</li>'
+        queries = "".join(copybox(q) for q in research.get("search_queries_for_shiva") or [])
+        research_html = f"""
+        <div class="panel">
+          <div class="panel-head"><h2>Company</h2></div>
+          <p>{_esc(research.get("company_brief", ""))}</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>People to contact</h2>
+            <span class="t-muted">leads from public web search &mdash; verify on LinkedIn before reaching out</span></div>
+          <ul class="list list-compact">{contacts}</ul>
+          <p class="t-muted footnote" style="margin-top:14px">Searches to run yourself:</p>
+          {queries}
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Messages (drafts &mdash; you send these)</h2></div>
+          <p class="t-muted footnote">Connection note</p>{copybox(research.get("connection_note", ""))}
+          <p class="t-muted footnote">Follow-up, 3-4 days later</p>{copybox(research.get("followup_note", ""))}
+        </div>"""
+    else:
+        research_html = ('<div class="panel"><p class="t-muted">No research yet for this job. '
+                         'Run Research + Tailor below.</p></div>')
+
+    if report and report.get("pdf_path"):
+        gaps = "".join(f"<li>{_esc(g)}</li>" for g in report.get("honest_gaps") or []) \
+            or '<li class="t-muted">None</li>'
+        resume_html = f"""
+        <div class="panel">
+          <div class="panel-head"><h2>Tailored resume</h2>
+            <span class="t-muted">keyword coverage {report.get("baseline_coverage_pct")}% &rarr;
+            {report.get("tailored_coverage_pct")}%</span>
+            <a class="btn btn-ghost btn-sm" style="margin-left:auto"
+               href="/tailored/{job_id}/resume.pdf" {EXT}>Open PDF</a></div>
+          <iframe class="resume-frame" src="/tailored/{job_id}/resume.pdf#view=FitH"></iframe>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Honest gaps</h2>
+            <span class="t-muted">what the posting asks for that your profile doesn't show &mdash; not added to the resume</span></div>
+          <ul class="list list-compact">{gaps}</ul>
+        </div>"""
+    else:
+        resume_html = ""
+
+    why = _esc(ai.get("why", ""))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_esc(taxonomy.company_label(job.get("company","")))} &middot; {_esc(job.get("title",""))}</title>
+<style>{_CSS}</style>
+</head>
+<body>
+{_topbar("Job detail")}
+<div class="wrap">
+  <div class="panel">
+    <div class="job-head">
+      <div>
+        <div class="job-company">{_esc(taxonomy.company_label(job.get("company","")))}</div>
+        <div class="job-title">{_esc(job.get("title",""))}</div>
+        <div class="meta">{_esc(job.get("location",""))} &middot; {_esc(taxonomy.source_label(job))}
+          &middot; {_esc(taxonomy.industry_label(job))}</div>
+      </div>
+      <span class="fit fit-{BAND_KEYS.get(label, "unrated")}" style="cursor:default">{_esc(label)}</span>
+    </div>
+    {f'<p class="note" style="-webkit-line-clamp:unset">{why}</p>' if why else ""}
+    <div class="actions">
+      <a class="btn btn-primary" href="{url}" {EXT}>Open posting</a>
+      <button class="btn btn-applied" onclick="markAppliedHere('{job_id}')">Mark Applied</button>
+      <button class="btn btn-ghost" id="rt-btn" onclick="rerun('{job_id}')">
+        {"Re-run" if report else "Run"} Research + Tailor</button>
+      <a class="btn btn-ghost" href="/">Back to Jobs Feed</a>
+    </div>
+  </div>
+  {research_html}
+  {resume_html}
+</div>
+{quick_apply_html}
+<script>
+{_SHARED_JS}
+function markAppliedHere(jobId) {{
+  fetch('/api/apply/' + jobId, {{ method: 'POST' }})
+    .then(r => r.json())
+    .then(d => d.ok ? (location.href = '/?applied=' + encodeURIComponent(jobId))
+                    : alert('Failed: ' + (d.error || 'unknown error')));
+}}
+function rerun(jobId) {{
+  const b = document.getElementById('rt-btn');
+  b.disabled = true; b.textContent = 'Working... up to a minute';
+  fetch('/api/research-tailor/' + jobId, {{ method: 'POST' }})
+    .then(() => location.reload())
+    .catch(() => {{ b.disabled = false; b.textContent = 'Retry'; }});
 }}
 </script>
 </body>
