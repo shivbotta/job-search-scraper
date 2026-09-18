@@ -1,0 +1,38 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                          DAILY WORKFLOW QUICKSTART                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+EVERY DAY (3-5 minutes):
+
+  cd ~/AI-Workspace/Career/shiva-job-search
+  ./daily.sh
+
+That's it. Runs:
+  1. Scrapes fresh jobs from 7+ sources
+  2. Scores each job (AI fit + keyword match)
+  3. Launches dashboard at http://localhost:9009
+
+THEN IN THE DASHBOARD:
+
+  Browse        → Jobs Feed tab, filtered by source & industry
+  Evaluate      → Check fit label (click to see raw scores)
+  Research      → Click "Research + Tailor" to get company brief & contacts
+  Apply         → Click "Mark Applied" to hide from feed and track status
+  Track         → Applied tab to manage your pipeline
+
+STOP THE DASHBOARD:
+
+  Press Ctrl+C in the terminal
+
+SEE DETAILED GUIDE:
+
+  cat DAILY-WORKFLOW.md
+
+FULL COMMANDS (if you need them):
+
+  ./daily.sh                           # Full daily run (recommended)
+  python3 cli.py scrape --skip-google  # Scrape only (faster)
+  python3 cli.py score                 # Score only (if you updated profile)
+  python3 cli.py refilter --dry-run    # Check relevance gate
+
+═══════════════════════════════════════════════════════════════════════════════
