@@ -319,34 +319,76 @@ def cmd_add_manual(args):
 def cmd_score(args):
     profile = load_profile()
     jobs = load_jobs()
-    targets = [args.job_id] if args.job_id else list(jobs.keys())
 
-    for jid in targets:
-        job = jobs.get(jid)
+    if args.job_id:
+        job = jobs.get(args.job_id)
         if not job:
-            print(f"  [skip] {jid} not found")
-            continue
-
+            print(f"  [skip] {args.job_id} not found")
+            return
         det = deterministic.score_job(job, profile)
         job["deterministic_score"] = det
-
         try:
-            ai = ai_scorer.score_job(job, profile)
-            job["ai_score"] = ai
+            job["ai_score"] = ai_scorer.score_job(job, profile)
         except KeyError:
             print("  [warn] ANTHROPIC_API_KEY not set -- skipping AI scoring")
-            ai = None
         except Exception as e:
-            print(f"  [warn] AI scoring failed for {jid}: {e}")
-            ai = None
-
-        jobs[jid] = job
-        band = bands.fit_label(job)
+            print(f"  [warn] AI scoring failed for {args.job_id}: {e}")
+        jobs[args.job_id] = job
+        save_jobs(jobs)
+        ai = job.get("ai_score") or {}
         det_line = f"det={det['composite_score']} ({det['best_track']})"
-        ai_line = f"ai={ai['fit_score']}" if ai and ai.get("fit_score") is not None else "ai=n/a"
-        print(f"{jid[:36]:36s} {job.get('title','')[:32]:32s} {det_line:26s} {ai_line:8s} [{band}]")
+        ai_line = f"ai={ai.get('fit_score')}" if ai.get("fit_score") is not None else "ai=n/a"
+        print(f"{args.job_id[:36]:36s} {job.get('title','')[:32]:32s} {det_line:26s} {ai_line:8s} "
+              f"[{bands.fit_label(job)}]")
+        return
 
+    # Deterministic scoring is free, local, and instant -- run it for every
+    # job every time, unconditionally.
+    for job in jobs.values():
+        job["deterministic_score"] = deterministic.score_job(job, profile)
     save_jobs(jobs)
+    print(f"Deterministic score computed for all {len(jobs)} jobs.")
+
+    # The AI scorer costs real API time and money, so it only runs on the
+    # TOP `--ai-limit` jobs by deterministic score, and by default skips
+    # jobs that already have an ai_score (pass --rescore to force). This is
+    # what keeps worst-case scoring time bounded regardless of how many
+    # postings get scraped -- 2000 scraped jobs no longer means 2000 AI
+    # calls, just up to --ai-limit of the most promising ones.
+    candidates = jobs.values() if args.rescore else [j for j in jobs.values() if not j.get("ai_score")]
+    candidates = sorted(candidates, key=lambda j: j["deterministic_score"]["composite_score"], reverse=True)
+    to_score = candidates[:args.ai_limit]
+
+    already_scored = sum(1 for j in jobs.values() if j.get("ai_score")) - (len(to_score) if args.rescore else 0)
+    skipped_by_cap = max(len(candidates) - len(to_score), 0)
+    print(f"AI scoring {len(to_score)} job(s) (concurrency={args.concurrency}) -- "
+          f"{already_scored} already scored, {skipped_by_cap} left as deterministic-only "
+          f"under the --ai-limit cap.")
+
+    if not to_score:
+        print("Nothing to AI-score.")
+        return
+    if "ANTHROPIC_API_KEY" not in os.environ:
+        print("  [warn] ANTHROPIC_API_KEY not set -- skipping AI scoring")
+        return
+
+    def _progress(done, total, elapsed, remaining):
+        pct = round(100 * done / total)
+        print(f"  Scored {done}/{total} ({pct}%) -- "
+              f"{elapsed/60:.1f} min elapsed, ~{remaining/60:.1f} min remaining")
+
+    outcome = ai_scorer.score_jobs_concurrently(
+        to_score, profile, concurrency=args.concurrency, progress_cb=_progress
+    )
+    for jid, result in outcome["results"].items():
+        jobs[jid]["ai_score"] = result
+    save_jobs(jobs)
+
+    if outcome["errors"]:
+        print(f"  [warn] {len(outcome['errors'])} job(s) failed AI scoring "
+              f"(kept deterministic score only), e.g.: "
+              f"{next(iter(outcome['errors'].items()))}")
+    print(f"AI scoring complete: {len(outcome['results'])} scored, {len(outcome['errors'])} failed.")
 
 
 def cmd_tailor(args):
@@ -501,6 +543,14 @@ def main():
 
     sp = sub.add_parser("score")
     sp.add_argument("--job-id")
+    sp.add_argument("--ai-limit", type=int, default=400,
+                     help="max jobs to send to the AI scorer, ranked by deterministic "
+                          "score (default 400). The rest keep their deterministic "
+                          "score only and show as 'Not rated yet' on the dashboard.")
+    sp.add_argument("--concurrency", type=int, default=15,
+                     help="concurrent AI scoring requests in flight (default 15)")
+    sp.add_argument("--rescore", action="store_true",
+                     help="re-run AI scoring even for jobs that already have an ai_score")
     sp.set_defaults(func=cmd_score)
 
     sp = sub.add_parser("tailor")
